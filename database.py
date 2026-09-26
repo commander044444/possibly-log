@@ -426,7 +426,10 @@ async def run_migrations() -> None:
             WHERE NOT EXISTS (SELECT 1 FROM news_sources LIMIT 1)
             """
         )
-    logger.info("Migrations applied")
+        await conn.execute(
+            "ALTER TABLE channel_daily_stats ADD COLUMN IF NOT EXISTS members_count INTEGER"
+        )
+        logger.info("Migrations applied")
 
 
 # ─── Helper query wrappers ─────────────────────────────

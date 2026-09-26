@@ -458,12 +458,60 @@ async def handle_callback(callback: CallbackQuery, bot) -> None:
         if not row:
             await msg.reply("دسترسی ندارید.", components=kb.back_main())
             return
+
+        await msg.reply("⏳ در حال ساخت گزارش تصویری…")
+
+        # live channel meta (members / bio / avatar) — never invent numbers
+        members = None
+        bio = row.get("channel_bio")
+        avatar_bytes = None
+        title = row["channel_title"] or str(cid)
+        uname = row.get("channel_username")
+        try:
+            chat = await _get_chat_flexible(bot, cid)
+            if chat is not None:
+                title = getattr(chat, "title", None) or title
+                uname = getattr(chat, "username", None) or uname
+                bio = getattr(chat, "description", None) or getattr(chat, "bio", None) or bio
+                try:
+                    members = await bot.get_chat_members_count(cid)
+                except Exception:
+                    try:
+                        members = await bot.get_chat_members_count(str(cid))
+                    except Exception as e:
+                        logger.warning("members_count failed: %s", e)
+                # avatar
+                photo = getattr(chat, "photo", None)
+                if photo is not None:
+                    file_id = (
+                        getattr(photo, "big_file_id", None)
+                        or getattr(photo, "small_file_id", None)
+                        or getattr(photo, "file_id", None)
+                    )
+                    if file_id:
+                        try:
+                            avatar_bytes = await bot.get_file(file_id)
+                            if not isinstance(avatar_bytes, (bytes, bytearray)):
+                                # some builds return a File object
+                                avatar_bytes = getattr(avatar_bytes, "content", None) or None
+                        except Exception as e:
+                            logger.warning("avatar download failed: %s", e)
+        except Exception:
+            logger.exception("live channel meta")
+
+        if members is not None:
+            await stats_svc.snapshot_members(cid, members)
+
         summary = await stats_svc.get_channel_stats_summary(cid)
         png = stats_svc.render_stats_image(
-            row["channel_title"] or str(cid),
-            row.get("channel_username"),
+            title,
+            uname,
             summary,
+            bio=bio,
+            members=members,
+            avatar_bytes=avatar_bytes,
         )
+        path = None
         try:
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
                 f.write(png)
@@ -471,15 +519,20 @@ async def handle_callback(callback: CallbackQuery, bot) -> None:
             await bot.send_photo(
                 chat_id=uid,
                 photo=InputFile(path),
-                caption=f"📊 آمار «{row['channel_title']}»",
+                caption=f"📊 آمار «{title}»",
             )
-            os.unlink(path)
         except Exception:
             logger.exception("send stats")
             await msg.reply(
                 f"امروز: {summary['today_messages']} | هفته: {summary['week_messages']} | ماه: {summary['month_messages']}",
                 components=kb.back_main(),
             )
+        finally:
+            if path:
+                try:
+                    os.unlink(path)
+                except Exception:
+                    pass
         return
 
     if data == "support:menu":
