@@ -506,6 +506,7 @@ async def handle_callback(callback: CallbackQuery, bot) -> None:
             png = stats_svc.render_stats_image(
                 title, uname, summary,
                 bio=bio, members=members, avatar_bytes=avatar_bytes,
+                channel_id=cid,
             )
         except Exception:
             logger.exception("render stats image")

@@ -1,49 +1,50 @@
 """
-Professional channel analytics card (Pillow + Matplotlib).
-Always free for channel owners. Never invents fake numbers.
+Professional Channel Analytics Dashboard image.
+Pillow + Matplotlib · real data only · never invents numbers.
 """
 from __future__ import annotations
 
 import io
 import logging
-import math
-from datetime import date, datetime, timedelta, timezone
-from typing import Optional, Tuple, List, Any
+import os
+from datetime import date, timedelta
+from typing import Optional, List, Tuple, Any
 
 import database as db
 
 logger = logging.getLogger(__name__)
 
-# Canvas
 W, H = 1080, 1350
 
-# Palette — modern dark premium
-BG = (18, 20, 32)
-CARD = (28, 32, 48)
-CARD2 = (36, 42, 62)
-ACCENT = (76, 139, 245)       # blue
-ACCENT2 = (233, 69, 96)       # rose
-GREEN = (46, 204, 113)
-MUTED = (140, 150, 170)
-WHITE = (245, 247, 250)
-SOFT = (200, 210, 230)
-
-
-def _na(v) -> str:
-    if v is None:
-        return "N/A"
-    return str(v)
+# ── New Premium Dark Theme ─────────────────────────────
+BG = (12, 14, 22)
+SURFACE = (22, 26, 38)
+SURFACE2 = (30, 36, 52)
+BORDER = (48, 56, 78)
+ACCENT = (88, 166, 255)
+ACCENT_SOFT = (56, 110, 180)
+GREEN = (52, 211, 153)
+ROSE = (251, 113, 133)
+AMBER = (251, 191, 36)
+TEXT = (248, 250, 252)
+TEXT2 = (203, 213, 225)
+MUTED = (148, 163, 184)
 
 
 def _fmt(n) -> str:
     if n is None:
-        return "N/A"
+        return "—"
     try:
-        n = int(n)
+        return f"{int(n):,}"
     except Exception:
-        return "N/A"
-    return f"{n:,}"
+        return "—"
 
+
+def _na(v) -> str:
+    return "—" if v is None else str(v)
+
+
+# ── Data ───────────────────────────────────────────────
 
 async def get_channel_stats_summary(channel_id: int) -> dict:
     today = date.today()
@@ -61,83 +62,66 @@ async def get_channel_stats_summary(channel_id: int) -> dict:
 
     today_row = next((r for r in daily if r["date"] == today), None)
     week = [r for r in daily if r["date"] >= week_start]
-    month = list(daily)
 
     def sum_col(rows, col):
         return sum((r[col] or 0) for r in rows)
 
-    # total all-time messages from published_news if available
     total_pub = await db.fetchval(
         "SELECT COUNT(*) FROM published_news WHERE channel_id = $1",
         channel_id,
     )
 
-    # member snapshots if column exists
     members_series = []
-    try:
-        members_series = [
-            (r["date"], r.get("members_count"))
-            for r in daily
-            if r.get("members_count") is not None
-        ]
-    except Exception:
-        members_series = []
+    for r in daily:
+        mc = r.get("members_count")
+        if mc is not None:
+            members_series.append((r["date"], int(mc)))
 
-    members_now = None
-    members_7d_ago = None
-    members_30d_ago = None
-    if members_series:
-        members_now = members_series[-1][1]
-        for d, m in members_series:
-            if d <= week_start and members_7d_ago is None:
-                members_7d_ago = m
-            if d <= month_start and members_30d_ago is None:
-                members_30d_ago = m
-        # if first rows are after week_start, use earliest
-        if members_7d_ago is None and members_series:
-            members_7d_ago = members_series[0][1]
-        if members_30d_ago is None and members_series:
-            members_30d_ago = members_series[0][1]
+    members_now = members_series[-1][1] if members_series else None
+    members_7 = None
+    members_30 = None
+    for d, m in members_series:
+        if d <= week_start:
+            members_7 = m
+        if d <= month_start:
+            members_30 = m
+    if members_7 is None and members_series:
+        members_7 = members_series[0][1]
+    if members_30 is None and members_series:
+        members_30 = members_series[0][1]
 
-    joined_7 = left_7 = joined_30 = left_30 = None
-    if members_now is not None and members_7d_ago is not None:
-        delta7 = members_now - members_7d_ago
-        if delta7 >= 0:
-            joined_7, left_7 = delta7, 0
-        else:
-            joined_7, left_7 = 0, -delta7
-    if members_now is not None and members_30d_ago is not None:
-        delta30 = members_now - members_30d_ago
-        if delta30 >= 0:
-            joined_30, left_30 = delta30, 0
-        else:
-            joined_30, left_30 = 0, -delta30
+    growth_7 = growth_30 = None
+    if members_now is not None and members_7 is not None:
+        growth_7 = members_now - members_7
+    if members_now is not None and members_30 is not None:
+        growth_30 = members_now - members_30
 
     return {
         "today_messages": (today_row["messages"] if today_row else 0),
         "week_messages": sum_col(week, "messages"),
-        "month_messages": sum_col(month, "messages"),
-        "total_messages": int(total_pub or 0) or sum_col(month, "messages"),
-        "photo": sum_col(month, "photo_count"),
-        "video": sum_col(month, "video_count"),
-        "gif": sum_col(month, "gif_count"),
-        "voice": sum_col(month, "voice_count"),
-        "audio": sum_col(month, "audio_count"),
-        "sticker": sum_col(month, "sticker_count"),
-        "file": sum_col(month, "file_count"),
-        "text": sum_col(month, "text_count"),
+        "month_messages": sum_col(daily, "messages"),
+        "total_messages": int(total_pub or 0) or sum_col(daily, "messages"),
+        "photo": sum_col(daily, "photo_count"),
+        "video": sum_col(daily, "video_count"),
+        "gif": sum_col(daily, "gif_count"),
+        "voice": sum_col(daily, "voice_count"),
+        "audio": sum_col(daily, "audio_count"),
+        "sticker": sum_col(daily, "sticker_count"),
+        "file": sum_col(daily, "file_count"),
+        "text": sum_col(daily, "text_count"),
         "daily_series": [(r["date"], r["messages"] or 0) for r in daily],
         "members_now": members_now,
-        "joined_7d": joined_7,
-        "left_7d": left_7,
-        "joined_30d": joined_30,
-        "left_30d": left_30,
+        "growth_7d": growth_7,
+        "growth_30d": growth_30,
+        "joined_7d": growth_7 if growth_7 is not None and growth_7 > 0 else (0 if growth_7 is not None else None),
+        "left_7d": (-growth_7 if growth_7 is not None and growth_7 < 0 else (0 if growth_7 is not None else None)),
+        "joined_30d": growth_30 if growth_30 is not None and growth_30 > 0 else (0 if growth_30 is not None else None),
+        "left_30d": (-growth_30 if growth_30 is not None and growth_30 < 0 else (0 if growth_30 is not None else None)),
         "report_date": today.isoformat(),
     }
 
 
 async def snapshot_members(channel_id: int, members_count: Optional[int]) -> None:
-    """Store today's member count if known (for future join/leave deltas)."""
     if members_count is None:
         return
     try:
@@ -151,159 +135,144 @@ async def snapshot_members(channel_id: int, members_count: Optional[int]) -> Non
             channel_id, int(members_count),
         )
     except Exception as e:
-        # column may not exist yet
-        logger.warning("snapshot_members failed: %s", e)
+        logger.warning("snapshot_members: %s", e)
 
 
-def _load_fonts():
-    from PIL import ImageFont
-    candidates = [
+# ── Fonts ──────────────────────────────────────────────
+
+def _font_paths():
+    candidates_reg = [
+        "/usr/share/fonts/SlidesCarnival/google/Cairo/static/Cairo-Regular.ttf",
+        "/usr/share/fonts/SlidesCarnival/google/Noto Sans Arabic/static/NotoSansArabic-Regular.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
     ]
-    bold_c = [
+    candidates_bold = [
+        "/usr/share/fonts/SlidesCarnival/google/Cairo/static/Cairo-Bold.ttf",
+        "/usr/share/fonts/SlidesCarnival/google/Noto Sans Arabic/static/NotoSansArabic-Bold.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
         "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
     ]
-    path = next((c for c in candidates if __import__("os").path.exists(c)), None)
-    bold = next((c for c in bold_c if __import__("os").path.exists(c)), path)
+    reg = next((p for p in candidates_reg if os.path.exists(p)), None)
+    bold = next((p for p in candidates_bold if os.path.exists(p)), reg)
+    return reg, bold
 
-    def f(size, b=False):
+
+def _fonts():
+    from PIL import ImageFont
+    reg, bold = _font_paths()
+
+    def make(size, use_bold=False):
+        path = bold if use_bold else reg
         try:
-            return ImageFont.truetype(bold if b else path, size) if path else ImageFont.load_default()
+            if path:
+                return ImageFont.truetype(path, size)
         except Exception:
-            return ImageFont.load_default()
+            pass
+        return ImageFont.load_default()
 
     return {
-        "title": f(42, True),
-        "subtitle": f(26, False),
-        "card_val": f(40, True),
-        "card_lbl": f(20, False),
-        "section": f(24, True),
-        "body": f(22, False),
-        "small": f(18, False),
-        "tiny": f(15, False),
+        "hero": make(52, True),
+        "title": make(40, True),
+        "subtitle": make(28, False),
+        "num": make(56, True),
+        "num_sm": make(36, True),
+        "label": make(22, False),
+        "section": make(26, True),
+        "body": make(24, False),
+        "small": make(20, False),
+        "tiny": make(16, False),
     }
 
 
-def _rounded_rect(draw, xy, radius, fill):
-    draw.rounded_rectangle(xy, radius=radius, fill=fill)
+def _round(draw, box, r, fill, outline=None, width=1):
+    draw.rounded_rectangle(box, radius=r, fill=fill, outline=outline, width=width)
 
 
-def _circle_avatar(base_img, avatar_bytes: Optional[bytes], size: int = 140):
+def _center_text(draw, text, cy, font, fill, x0, x1):
+    bbox = draw.textbbox((0, 0), text, font=font)
+    tw = bbox[2] - bbox[0]
+    th = bbox[3] - bbox[1]
+    x = x0 + (x1 - x0 - tw) // 2
+    y = cy - th // 2
+    draw.text((x, y), text, font=font, fill=fill)
+    return th
+
+
+def _avatar_circle(avatar_bytes: Optional[bytes], size: int = 160):
     from PIL import Image, ImageDraw
     canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     mask = Image.new("L", (size, size), 0)
-    md = ImageDraw.Draw(mask)
-    md.ellipse((0, 0, size - 1, size - 1), fill=255)
+    ImageDraw.Draw(mask).ellipse((0, 0, size - 1, size - 1), fill=255)
 
     if avatar_bytes:
         try:
             av = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA")
             av = av.resize((size, size), Image.Resampling.LANCZOS)
             canvas.paste(av, (0, 0), mask)
-            return canvas
-        except Exception:
-            pass
+            # border ring
+            ring = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+            rd = ImageDraw.Draw(ring)
+            rd.ellipse((2, 2, size - 3, size - 3), outline=ACCENT + (255,), width=4)
+            return Image.alpha_composite(canvas, ring)
+        except Exception as e:
+            logger.warning("avatar process: %s", e)
 
-    # default gradient-ish avatar
     d = ImageDraw.Draw(canvas)
-    d.ellipse((0, 0, size - 1, size - 1), fill=ACCENT)
-    d.ellipse((20, 20, size - 21, size - 21), fill=CARD2)
-    # simple broadcast icon
-    cx, cy = size // 2, size // 2
-    d.ellipse((cx - 18, cy - 18, cx + 18, cy + 18), outline=WHITE, width=3)
-    d.ellipse((cx - 8, cy - 8, cx + 8, cy + 8), fill=WHITE)
+    d.ellipse((0, 0, size - 1, size - 1), fill=SURFACE2)
+    d.ellipse((8, 8, size - 9, size - 9), outline=ACCENT, width=3)
+    # simple icon
+    cx = cy = size // 2
+    d.ellipse((cx - 22, cy - 28, cx + 22, cy - 2), outline=TEXT2, width=3)
+    d.arc((cx - 36, cy - 8, cx + 36, cy + 40), start=200, end=340, fill=TEXT2, width=3)
     return canvas
 
 
-def _make_activity_chart(daily_series: List[Tuple[Any, int]], width=980, height=260) -> "Image.Image":
+def _activity_chart(series: List[Tuple[Any, int]], w=980, h=280):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from PIL import Image
     import numpy as np
 
-    fig, ax = plt.subplots(figsize=(width / 100, height / 100), dpi=100)
-    fig.patch.set_facecolor("#1c2030")
-    ax.set_facecolor("#1c2030")
+    fig, ax = plt.subplots(figsize=(w / 100, h / 100), dpi=100)
+    fig.patch.set_facecolor("#161a26")
+    ax.set_facecolor("#161a26")
 
-    if daily_series:
-        # fill missing days for last 30
-        today = date.today()
-        lookup = {d: m for d, m in daily_series}
-        xs_dates = [today - timedelta(days=i) for i in range(29, -1, -1)]
-        ys = [lookup.get(d, 0) for d in xs_dates]
-        xs = np.arange(len(ys))
-        ax.fill_between(xs, ys, color="#4C8BF5", alpha=0.25)
-        ax.plot(xs, ys, color="#4C8BF5", linewidth=2.2)
-        ax.scatter(xs[::5], [ys[i] for i in range(0, len(ys), 5)], color="#E94560", s=18, zorder=5)
-        ax.set_xlim(-0.5, len(ys) - 0.5)
-        ymax = max(ys) if ys else 1
-        ax.set_ylim(0, max(ymax * 1.15, 1))
-        # sparse x labels
-        tick_idx = list(range(0, 30, 5))
-        ax.set_xticks(tick_idx)
-        ax.set_xticklabels([xs_dates[i].strftime("%m/%d") for i in tick_idx], color="#8C96AA", fontsize=8)
-        ax.tick_params(axis="y", colors="#8C96AA", labelsize=8)
-        for spine in ax.spines.values():
-            spine.set_color("#2A3148")
-        ax.grid(axis="y", color="#2A3148", linestyle="--", linewidth=0.6)
+    today = date.today()
+    lookup = {d: m for d, m in series}
+    dates = [today - timedelta(days=i) for i in range(29, -1, -1)]
+    ys = [lookup.get(d, 0) for d in dates]
+    xs = np.arange(30)
+
+    if any(ys):
+        ax.fill_between(xs, ys, color="#58A6FF", alpha=0.18)
+        ax.plot(xs, ys, color="#58A6FF", linewidth=3.0, solid_capstyle="round")
+        peak_i = int(np.argmax(ys))
+        ax.scatter([peak_i], [ys[peak_i]], color="#FB7185", s=60, zorder=5)
+        ax.set_xlim(-0.5, 29.5)
+        ax.set_ylim(0, max(max(ys) * 1.25, 1))
+        ticks = [0, 7, 14, 21, 29]
+        ax.set_xticks(ticks)
+        ax.set_xticklabels([dates[i].strftime("%m/%d") for i in ticks], color="#94A3B8", fontsize=11)
+        ax.tick_params(axis="y", colors="#94A3B8", labelsize=11)
+        for s in ax.spines.values():
+            s.set_color("#303848")
+        ax.grid(axis="y", color="#303848", linestyle="--", linewidth=0.7, alpha=0.8)
     else:
-        ax.text(0.5, 0.5, "N/A", ha="center", va="center", color="#8C96AA", fontsize=16)
+        ax.text(0.5, 0.5, "No activity data yet", ha="center", va="center",
+                color="#94A3B8", fontsize=16)
         ax.set_xticks([])
         ax.set_yticks([])
-        for spine in ax.spines.values():
-            spine.set_visible(False)
+        for s in ax.spines.values():
+            s.set_visible(False)
 
-    fig.tight_layout(pad=0.4)
+    fig.tight_layout(pad=0.5)
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=100, facecolor=fig.get_facecolor(), edgecolor="none")
-    plt.close(fig)
-    buf.seek(0)
-    return Image.open(buf).convert("RGBA")
-
-
-def _make_content_chart(stats: dict, width=980, height=220) -> "Image.Image":
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    from PIL import Image
-
-    labels = ["Text", "Photo", "Video", "GIF", "Voice", "Audio", "File", "Sticker"]
-    keys = ["text", "photo", "video", "gif", "voice", "audio", "file", "sticker"]
-    values = [int(stats.get(k) or 0) for k in keys]
-    colors = ["#4C8BF5", "#2ECC71", "#E94560", "#9B59B6", "#F39C12", "#1ABC9C", "#95A5A6", "#E67E22"]
-
-    fig, ax = plt.subplots(figsize=(width / 100, height / 100), dpi=100)
-    fig.patch.set_facecolor("#1c2030")
-    ax.set_facecolor("#1c2030")
-
-    if sum(values) > 0:
-        bars = ax.barh(labels, values, color=colors, height=0.65)
-        ax.tick_params(axis="y", colors="#C8D2E6", labelsize=9)
-        ax.tick_params(axis="x", colors="#8C96AA", labelsize=8)
-        for spine in ax.spines.values():
-            spine.set_color("#2A3148")
-        ax.grid(axis="x", color="#2A3148", linestyle="--", linewidth=0.5)
-        xmax = max(values)
-        ax.set_xlim(0, xmax * 1.2 if xmax else 1)
-        for bar, v in zip(bars, values):
-            ax.text(v + xmax * 0.02, bar.get_y() + bar.get_height() / 2,
-                    str(v), va="center", color="#C8D2E6", fontsize=8)
-    else:
-        ax.text(0.5, 0.5, "N/A", ha="center", va="center", color="#8C96AA", fontsize=16)
-        ax.set_xticks([])
-        ax.set_yticks([])
-        for spine in ax.spines.values():
-            spine.set_visible(False)
-
-    fig.tight_layout(pad=0.4)
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=100, facecolor=fig.get_facecolor(), edgecolor="none")
+    fig.savefig(buf, format="png", dpi=100, facecolor=fig.get_facecolor(),
+                edgecolor="none", bbox_inches="tight", pad_inches=0.15)
     plt.close(fig)
     buf.seek(0)
     return Image.open(buf).convert("RGBA")
@@ -317,131 +286,135 @@ def render_stats_image(
     bio: Optional[str] = None,
     members: Optional[int] = None,
     avatar_bytes: Optional[bytes] = None,
+    channel_id: Optional[int] = None,
 ) -> bytes:
-    """
-    Professional 1080×1350 analytics card. PNG bytes. No fake data.
-    """
-    try:
-        from PIL import Image, ImageDraw, ImageFont, ImageFilter
-    except ImportError:
-        return _fallback_text_image(channel_title, stats)
+    """1080×1350 Professional Analytics Dashboard PNG."""
+    from PIL import Image, ImageDraw
 
-    fonts = _load_fonts()
+    fonts = _fonts()
     img = Image.new("RGB", (W, H), BG)
     draw = ImageDraw.Draw(img)
+    pad = 36
+    y = 28
 
-    # subtle top gradient band
-    for i in range(220):
-        ratio = i / 220
-        r = int(BG[0] + (CARD2[0] - BG[0]) * (1 - ratio) * 0.5)
-        g = int(BG[1] + (CARD2[1] - BG[1]) * (1 - ratio) * 0.5)
-        b = int(BG[2] + (ACCENT[2] - BG[2]) * (1 - ratio) * 0.15)
-        draw.line([(0, i), (W, i)], fill=(r, g, b))
+    # ═══ HEADER ═══════════════════════════════════════
+    header_h = 280
+    _round(draw, (pad, y, W - pad, y + header_h), 28, SURFACE)
 
-    pad = 40
-    y = 36
+    av = _avatar_circle(avatar_bytes, 150)
+    av_x = (W - 150) // 2
+    img.paste(av, (av_x, y + 22), av)
 
-    # Header card
-    _rounded_rect(draw, (pad, y, W - pad, y + 200), 24, CARD)
-    avatar = _circle_avatar(img, avatar_bytes, 128)
-    img.paste(avatar, (pad + 28, y + 36), avatar)
+    title = (channel_title or "Channel")[:32]
+    ty = y + 185
+    _center_text(draw, title, ty + 10, fonts["title"], TEXT, pad, W - pad)
 
-    title = (channel_title or "Channel")[:36]
     uname = f"@{channel_username}" if channel_username else ""
-    draw.text((pad + 180, y + 40), title, font=fonts["title"], fill=WHITE)
     if uname:
-        draw.text((pad + 180, y + 92), uname, font=fonts["subtitle"], fill=ACCENT)
-    bio_txt = (bio or "").strip()
-    if bio_txt:
-        bio_txt = bio_txt.replace("\n", " ")[:70]
-        draw.text((pad + 180, y + 130), bio_txt, font=fonts["small"], fill=MUTED)
+        _center_text(draw, uname, ty + 48, fonts["subtitle"], ACCENT, pad, W - pad)
 
-    report = stats.get("report_date") or date.today().isoformat()
-    draw.text((pad + 180, y + 160), f"Report · {report}", font=fonts["tiny"], fill=MUTED)
+    bio_line = (bio or "").replace("\n", " ").strip()[:55]
+    if bio_line:
+        _center_text(draw, bio_line, ty + 82, fonts["small"], MUTED, pad, W - pad)
 
-    y += 220
+    meta = f"Report  {stats.get('report_date', '—')}"
+    if channel_id is not None:
+        meta += f"   ·   ID {channel_id}"
+    _center_text(draw, meta, y + header_h - 22, fonts["tiny"], MUTED, pad, W - pad)
 
-    # Members row
+    y += header_h + 24
+
+    # ═══ MEMBERS ROW ══════════════════════════════════
     mem = members if members is not None else stats.get("members_now")
-    j7 = stats.get("joined_7d")
-    l7 = stats.get("left_7d")
-    j30 = stats.get("joined_30d")
-    l30 = stats.get("left_30d")
+    g7 = stats.get("growth_7d")
+    g30 = stats.get("growth_30d")
+
+    def growth_label(v):
+        if v is None:
+            return "—"
+        return f"+{v}" if v > 0 else str(v)
 
     cards = [
-        ("Members", _fmt(mem)),
-        ("+7d", _fmt(j7) if j7 is not None else "N/A"),
-        ("-7d", _fmt(l7) if l7 is not None else "N/A"),
-        ("+30d", _fmt(j30) if j30 is not None else "N/A"),
+        (_fmt(mem), "Members"),
+        (growth_label(g7), "7d Growth"),
+        (growth_label(g30), "30d Growth"),
     ]
     gap = 16
-    cw = (W - 2 * pad - 3 * gap) // 4
-    for i, (lbl, val) in enumerate(cards):
+    cw = (W - 2 * pad - 2 * gap) // 3
+    for i, (val, lbl) in enumerate(cards):
         x0 = pad + i * (cw + gap)
-        _rounded_rect(draw, (x0, y, x0 + cw, y + 100), 18, CARD)
-        # center text roughly
-        draw.text((x0 + 16, y + 18), lbl, font=fonts["card_lbl"], fill=MUTED)
-        draw.text((x0 + 16, y + 48), val, font=fonts["card_val"], fill=WHITE if val != "N/A" else MUTED)
+        _round(draw, (x0, y, x0 + cw, y + 120), 22, SURFACE)
+        _center_text(draw, val, y + 42, fonts["num"], TEXT if val != "—" else MUTED, x0, x0 + cw)
+        _center_text(draw, lbl, y + 92, fonts["label"], MUTED, x0, x0 + cw)
 
-    y += 120
+    y += 140
 
-    # Activity KPI cards
+    # ═══ MESSAGE KPIs ═════════════════════════════════
     kpis = [
-        ("Today", _fmt(stats.get("today_messages", 0)), ACCENT),
-        ("7 Days", _fmt(stats.get("week_messages", 0)), GREEN),
-        ("30 Days", _fmt(stats.get("month_messages", 0)), ACCENT2),
-        ("Total", _fmt(stats.get("total_messages", 0)), SOFT),
+        (_fmt(stats.get("today_messages", 0)), "Today", ACCENT),
+        (_fmt(stats.get("week_messages", 0)), "7 Days", GREEN),
+        (_fmt(stats.get("month_messages", 0)), "30 Days", ROSE),
+        (_fmt(stats.get("total_messages", 0)), "Total", AMBER),
     ]
     cw = (W - 2 * pad - 3 * gap) // 4
-    for i, (lbl, val, color) in enumerate(kpis):
+    for i, (val, lbl, color) in enumerate(kpis):
         x0 = pad + i * (cw + gap)
-        _rounded_rect(draw, (x0, y, x0 + cw, y + 110), 18, CARD)
-        draw.rectangle((x0, y, x0 + 6, y + 110), fill=color)
-        draw.text((x0 + 18, y + 22), lbl, font=fonts["card_lbl"], fill=MUTED)
-        draw.text((x0 + 18, y + 52), val, font=fonts["card_val"], fill=WHITE)
+        _round(draw, (x0, y, x0 + cw, y + 130), 22, SURFACE)
+        # accent bar top
+        draw.rounded_rectangle((x0 + 16, y + 10, x0 + cw - 16, y + 16), radius=3, fill=color)
+        _center_text(draw, val, y + 55, fonts["num_sm"], TEXT, x0, x0 + cw)
+        _center_text(draw, lbl, y + 100, fonts["label"], MUTED, x0, x0 + cw)
 
-    y += 130
+    y += 150
 
-    # Activity chart section
-    _rounded_rect(draw, (pad, y, W - pad, y + 310), 22, CARD)
-    draw.text((pad + 24, y + 16), "Activity · 30 Days", font=fonts["section"], fill=WHITE)
-    chart = _make_activity_chart(stats.get("daily_series") or [], width=960, height=250)
-    chart = chart.resize((960, 250), Image.Resampling.LANCZOS)
-    img.paste(chart, (pad + 20, y + 50), chart)
+    # ═══ ACTIVITY CHART ═══════════════════════════════
+    chart_h = 320
+    _round(draw, (pad, y, W - pad, y + chart_h), 24, SURFACE)
+    draw.text((pad + 28, y + 18), "Activity  ·  30 Days", font=fonts["section"], fill=TEXT)
+    try:
+        chart = _activity_chart(stats.get("daily_series") or [], w=960, h=250)
+        chart = chart.resize((960, 250), Image.Resampling.LANCZOS)
+        img.paste(chart, (pad + 20, y + 55), chart)
+    except Exception:
+        logger.exception("chart render")
+        _center_text(draw, "Chart unavailable", y + chart_h // 2, fonts["body"], MUTED, pad, W - pad)
 
-    y += 330
+    y += chart_h + 20
 
-    # Content type chart
-    _rounded_rect(draw, (pad, y, W - pad, y + 280), 22, CARD)
-    draw.text((pad + 24, y + 16), "Content Types · 30 Days", font=fonts["section"], fill=WHITE)
-    cchart = _make_content_chart(stats, width=960, height=220)
-    cchart = cchart.resize((960, 220), Image.Resampling.LANCZOS)
-    img.paste(cchart, (pad + 20, y + 48), cchart)
+    # ═══ CONTENT GRID ═════════════════════════════════
+    section_h = 250
+    _round(draw, (pad, y, W - pad, y + section_h), 24, SURFACE)
+    draw.text((pad + 28, y + 16), "Content Types  ·  30 Days", font=fonts["section"], fill=TEXT)
 
-    y += 300
-
-    # Footer content grid (compact numbers)
-    types = [
-        ("Text", stats.get("text")),
-        ("Photo", stats.get("photo")),
-        ("Video", stats.get("video")),
-        ("Voice", stats.get("voice")),
-        ("GIF", stats.get("gif")),
-        ("Audio", stats.get("audio")),
-        ("File", stats.get("file")),
-        ("Sticker", stats.get("sticker")),
+    items = [
+        ("📝 Text", stats.get("text")),
+        ("📷 Photo", stats.get("photo")),
+        ("🎥 Video", stats.get("video")),
+        ("🎙 Voice", stats.get("voice")),
+        ("🎵 Audio", stats.get("audio")),
+        ("🎞 GIF", stats.get("gif")),
+        ("📁 File", stats.get("file")),
+        ("😀 Sticker", stats.get("sticker")),
     ]
-    _rounded_rect(draw, (pad, y, W - pad, min(H - 30, y + 140)), 18, CARD)
-    for i, (lbl, val) in enumerate(types):
+    grid_top = y + 60
+    cell_w = (W - 2 * pad - 40) // 4
+    cell_h = 80
+    for i, (lbl, val) in enumerate(items):
         col = i % 4
         row = i // 4
-        x0 = pad + 24 + col * 250
-        y0 = y + 20 + row * 55
-        draw.text((x0, y0), lbl, font=fonts["small"], fill=MUTED)
-        draw.text((x0 + 100, y0), _fmt(val), font=fonts["body"], fill=WHITE)
+        x0 = pad + 20 + col * cell_w
+        y0 = grid_top + row * cell_h
+        _round(draw, (x0 + 4, y0, x0 + cell_w - 8, y0 + cell_h - 10), 16, SURFACE2)
+        _center_text(draw, _fmt(val), y0 + 28, fonts["num_sm"], TEXT, x0, x0 + cell_w)
+        _center_text(draw, lbl, y0 + 58, fonts["tiny"], MUTED, x0, x0 + cell_w)
 
-    # tiny footer
-    draw.text((pad, H - 28), "Bale News Automation · Analytics", font=fonts["tiny"], fill=MUTED)
+    # footer
+    draw.text(
+        (pad, H - 28),
+        "Bale News Automation  ·  Real data only",
+        font=fonts["tiny"],
+        fill=MUTED,
+    )
 
     out = io.BytesIO()
     img.save(out, format="PNG", optimize=True)
@@ -452,10 +425,10 @@ def _fallback_text_image(title: str, stats: dict) -> bytes:
     from PIL import Image, ImageDraw
     img = Image.new("RGB", (800, 600), BG)
     d = ImageDraw.Draw(img)
-    d.text((30, 30), f"Stats: {title}", fill=WHITE)
-    d.text((30, 80), f"Today: {_fmt(stats.get('today_messages'))}", fill=SOFT)
-    d.text((30, 120), f"Week: {_fmt(stats.get('week_messages'))}", fill=SOFT)
-    d.text((30, 160), f"Month: {_fmt(stats.get('month_messages'))}", fill=SOFT)
+    d.text((40, 40), f"Stats: {title}", fill=TEXT)
+    d.text((40, 100), f"Today: {_fmt(stats.get('today_messages'))}", fill=TEXT2)
+    d.text((40, 140), f"Week: {_fmt(stats.get('week_messages'))}", fill=TEXT2)
+    d.text((40, 180), f"Month: {_fmt(stats.get('month_messages'))}", fill=TEXT2)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
