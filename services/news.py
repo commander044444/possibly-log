@@ -206,15 +206,29 @@ async def mark_published(channel_id: int, news_id: int) -> bool:
 
 
 def format_news_message(news: dict) -> str:
-    title = news.get("title") or ""
-    desc = news.get("description") or ""
-    url = news.get("url") or news.get("canonical_url") or ""
-    source = news.get("source_name") or "منبع"
-    body = f"📰 {title}\n\n"
+    """
+    📰 {title}
+
+    {description}
+
+    [🔗](url)
+    📡 منبع: {source}
+    """
+    title = (news.get("title") or "").strip()
+    desc = (news.get("description") or "").strip()
+    url = (news.get("url") or news.get("canonical_url") or "").strip()
+    source = (news.get("source_name") or "منبع").strip()
+
+    parts = [f"📰 {title}", ""]
     if desc:
-        body += truncate_text(desc, 2800) + "\n\n"
-    body += f"🔗 {url}\n"
-    body += f"📡 منبع: {source}"
+        parts.append(truncate_text(desc, 2800))
+        parts.append("")
+    if url:
+        parts.append(f"[🔗]({url})")
+    else:
+        parts.append("🔗")
+    parts.append(f"📡 منبع: {source}")
+    body = "\n".join(parts)
     return truncate_text(body, 3900)
 
 
