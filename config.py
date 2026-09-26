@@ -135,5 +135,5 @@ LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
 from pathlib import Path as _Path
 BASE_DIR = _Path(__file__).resolve().parent
 ASSETS_DIR = BASE_DIR / "assets" / "images"
-VIP_BANNER = ASSETS_DIR / "vip_banner.png"
+VIP_BANNER = ASSETS_DIR / "vip_banner.jpg"
 WELCOME_BANNER = ASSETS_DIR / "welcome_banner.png"  # optional, if added later
