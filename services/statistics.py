@@ -15,7 +15,7 @@ import database as db
 logger = logging.getLogger(__name__)
 
 # Larger canvas so text stays readable after Bale compression
-W, H = 1242, 1600
+W, H = 1440, 1860
 
 BG = (10, 12, 18)
 SURFACE = (24, 28, 42)
@@ -155,16 +155,16 @@ def _fonts():
 
     # LARGE sizes for mobile readability after messenger compression
     return {
-        "title": f(54, True),
-        "uname": f(36, False),
-        "bio": f(28, False),
-        "num_xl": f(72, True),
-        "num": f(56, True),
-        "num_md": f(44, True),
-        "label": f(28, False),
-        "section": f(34, True),
-        "small": f(26, False),
-        "tiny": f(22, False),
+        "title": f(68, True),
+        "uname": f(42, False),
+        "bio": f(32, False),
+        "num_xl": f(88, True),
+        "num": f(72, True),
+        "num_md": f(56, True),
+        "label": f(32, False),
+        "section": f(40, True),
+        "small": f(30, False),
+        "tiny": f(26, False),
     }
 
 
@@ -180,7 +180,7 @@ def _center(draw, text, cy, font, fill, x0, x1):
     return th
 
 
-def _avatar(avatar_bytes: Optional[bytes], size: int = 200):
+def _avatar(avatar_bytes: Optional[bytes], size: int = 260):
     from PIL import Image, ImageDraw
     out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     mask = Image.new("L", (size, size), 0)
@@ -276,18 +276,18 @@ def render_stats_image(
     y = 36
 
     # ── HEADER ────────────────────────────────────────
-    hh = 340
+    hh = 420
     _round(draw, (pad, y, W - pad, y + hh), 32, SURFACE)
 
-    av_size = 200
+    av_size = 260
     av = _avatar(avatar_bytes, av_size)
     img.paste(av, ((W - av_size) // 2, y + 28), av)
 
     title = (channel_title or "Channel")[:28]
-    _center(draw, title, y + 250, fonts["title"], TEXT, pad, W - pad)
+    _center(draw, title, y + 310, fonts["title"], TEXT, pad, W - pad)
 
     if channel_username:
-        _center(draw, f"@{channel_username}", y + 295, fonts["uname"], ACCENT, pad, W - pad)
+        _center(draw, f"@{channel_username}", y + 365, fonts["uname"], ACCENT, pad, W - pad)
 
     y += hh + 20
 
@@ -321,10 +321,10 @@ def render_stats_image(
     cw = (W - 2 * pad - 2 * gap) // 3
     for i, (val, lbl) in enumerate(row):
         x0 = pad + i * (cw + gap)
-        _round(draw, (x0, y, x0 + cw, y + 150), 26, SURFACE)
-        _center(draw, val, y + 55, fonts["num"], TEXT if val != "—" else MUTED, x0, x0 + cw)
-        _center(draw, lbl, y + 115, fonts["label"], MUTED, x0, x0 + cw)
-    y += 170
+        _round(draw, (x0, y, x0 + cw, y + 170), 28, SURFACE)
+        _center(draw, val, y + 65, fonts["num"], TEXT if val != "—" else MUTED, x0, x0 + cw)
+        _center(draw, lbl, y + 130, fonts["label"], MUTED, x0, x0 + cw)
+    y += 190
 
     # ── MESSAGE KPIs ──────────────────────────────────
     kpis = [
@@ -336,11 +336,11 @@ def render_stats_image(
     cw = (W - 2 * pad - 3 * gap) // 4
     for i, (val, lbl, color) in enumerate(kpis):
         x0 = pad + i * (cw + gap)
-        _round(draw, (x0, y, x0 + cw, y + 160), 26, SURFACE)
+        _round(draw, (x0, y, x0 + cw, y + 180), 28, SURFACE)
         draw.rounded_rectangle((x0 + 20, y + 14, x0 + cw - 20, y + 22), radius=4, fill=color)
-        _center(draw, val, y + 75, fonts["num_md"], TEXT, x0, x0 + cw)
-        _center(draw, lbl, y + 130, fonts["label"], MUTED, x0, x0 + cw)
-    y += 180
+        _center(draw, val, y + 85, fonts["num_md"], TEXT, x0, x0 + cw)
+        _center(draw, lbl, y + 145, fonts["label"], MUTED, x0, x0 + cw)
+    y += 200
 
     # ── CHART ─────────────────────────────────────────
     ch = 380

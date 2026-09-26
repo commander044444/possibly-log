@@ -470,6 +470,11 @@ async def handle_callback(callback: CallbackQuery, bot) -> None:
         uname = row.get("channel_username")
         try:
             chat = await _get_chat_flexible(bot, cid)
+            # retry by @username — sometimes photo only on username lookup
+            if (chat is None or getattr(chat, "photo", None) is None) and uname:
+                chat2 = await _get_chat_flexible(bot, uname)
+                if chat2 is not None:
+                    chat = chat2
             if chat is not None:
                 title = getattr(chat, "title", None) or title
                 uname = getattr(chat, "username", None) or uname
@@ -481,34 +486,12 @@ async def handle_callback(callback: CallbackQuery, bot) -> None:
                         members = await bot.get_chat_members_count(str(cid))
                     except Exception as e:
                         logger.warning("members_count failed: %s", e)
-                photo = getattr(chat, "photo", None)
-                if photo is not None:
-                    # python-bale-bot ChatPhoto: get_big_file() / get_small_file() -> bytes
-                    for method_name in ("get_big_file", "get_small_file"):
-                        meth = getattr(photo, method_name, None)
-                        if meth is None:
-                            continue
-                        try:
-                            data = await meth()
-                            if isinstance(data, (bytes, bytearray)) and len(data) > 100:
-                                avatar_bytes = bytes(data)
-                                logger.info("avatar via %s (%s bytes)", method_name, len(avatar_bytes))
-                                break
-                        except Exception as e:
-                            logger.warning("avatar %s failed: %s", method_name, e)
-                    if avatar_bytes is None:
-                        for attr in ("big_file_id", "small_file_id"):
-                            fid = getattr(photo, attr, None)
-                            if not fid:
-                                continue
-                            try:
-                                data = await bot.get_file(fid)
-                                if isinstance(data, (bytes, bytearray)) and len(data) > 100:
-                                    avatar_bytes = bytes(data)
-                                    logger.info("avatar via get_file(%s) %s bytes", attr, len(avatar_bytes))
-                                    break
-                            except Exception as e:
-                                logger.warning("get_file %s failed: %s", attr, e)
+                avatar_bytes = await _fetch_channel_avatar(bot, chat)
+                logger.info(
+                    "stats meta cid=%s title=%s uname=%s members=%s avatar=%s photo_attr=%s",
+                    cid, title, uname, members, bool(avatar_bytes),
+                    type(getattr(chat, "photo", None)).__name__,
+                )
         except Exception:
             logger.exception("live channel meta")
 
@@ -940,6 +923,73 @@ async def _get_chat_flexible(bot, chat_ref) -> Optional[object]:
             logger.warning("get_chat(%r) failed: %s", ref, e)
     if last_err:
         logger.warning("get_chat all candidates failed last=%s", last_err)
+    return None
+
+
+
+async def _fetch_channel_avatar(bot, chat) -> Optional[bytes]:
+    """Download channel profile photo using real python-bale-bot ChatPhoto API."""
+    if chat is None:
+        return None
+    photo = getattr(chat, "photo", None)
+    # MissingValue / empty guards
+    if photo is None:
+        return None
+    # Some builds use a sentinel for missing fields
+    try:
+        from bale.utils.types import MissingValue as _MV  # type: ignore
+    except Exception:
+        _MV = None
+    if _MV is not None and photo is _MV:
+        return None
+
+    # 1) preferred: ChatPhoto.get_big_file / get_small_file
+    for method_name in ("get_big_file", "get_small_file"):
+        meth = getattr(photo, method_name, None)
+        if not callable(meth):
+            continue
+        try:
+            data = await meth()
+            if isinstance(data, (bytes, bytearray)) and len(data) > 50:
+                logger.info("avatar OK via photo.%s (%d bytes)", method_name, len(data))
+                return bytes(data)
+            logger.warning("avatar photo.%s returned type=%s len=%s",
+                           method_name, type(data), getattr(data, "__len__", lambda: "?")())
+        except Exception as e:
+            logger.warning("avatar photo.%s error: %s", method_name, e)
+
+    # 2) file_id fields + bot.get_file
+    for attr in ("big_file_id", "small_file_id"):
+        fid = getattr(photo, attr, None)
+        if not fid or (_MV is not None and fid is _MV):
+            continue
+        fid = str(fid).strip()
+        if not fid or fid.lower() in ("none", "null", ""):
+            continue
+        try:
+            data = await bot.get_file(fid)
+            if isinstance(data, (bytes, bytearray)) and len(data) > 50:
+                logger.info("avatar OK via get_file(%s) (%d bytes)", attr, len(data))
+                return bytes(data)
+        except Exception as e:
+            logger.warning("avatar get_file(%s=%s) error: %s", attr, fid[:20], e)
+
+    # 3) big_file_object / small_file_object .get()
+    for attr in ("big_file_object", "small_file_object"):
+        obj = getattr(photo, attr, None)
+        if obj is None or (_MV is not None and obj is _MV):
+            continue
+        getm = getattr(obj, "get", None)
+        if callable(getm):
+            try:
+                data = await getm()
+                if isinstance(data, (bytes, bytearray)) and len(data) > 50:
+                    logger.info("avatar OK via %s.get() (%d bytes)", attr, len(data))
+                    return bytes(data)
+            except Exception as e:
+                logger.warning("avatar %s.get error: %s", attr, e)
+
+    logger.warning("avatar unavailable for chat=%s photo=%r", getattr(chat, "id", None), photo)
     return None
 
 
