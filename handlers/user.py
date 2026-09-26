@@ -486,12 +486,8 @@ async def handle_callback(callback: CallbackQuery, bot) -> None:
                         members = await bot.get_chat_members_count(str(cid))
                     except Exception as e:
                         logger.warning("members_count failed: %s", e)
-                avatar_bytes = await _fetch_channel_avatar(bot, chat)
-                logger.info(
-                    "stats meta cid=%s title=%s uname=%s members=%s avatar=%s photo_attr=%s",
-                    cid, title, uname, members, bool(avatar_bytes),
-                    type(getattr(chat, "photo", None)).__name__,
-                )
+                # avatar removed from stats image by design
+                logger.info("stats meta cid=%s title=%s uname=%s members=%s", cid, title, uname, members)
         except Exception:
             logger.exception("live channel meta")
 
@@ -502,7 +498,7 @@ async def handle_callback(callback: CallbackQuery, bot) -> None:
         try:
             png = stats_svc.render_stats_image(
                 title, uname, summary,
-                bio=bio, members=members, avatar_bytes=avatar_bytes,
+                bio=bio, members=members, avatar_bytes=None,
                 channel_id=cid,
             )
         except Exception:
