@@ -18,7 +18,7 @@ import keyboards as kb
 from services import subscription as sub_svc
 from services import payments as pay_svc
 from services import statistics as stats_svc
-from utils.helpers import is_admin, generate_ticket_code
+from utils.helpers import is_admin, generate_ticket_code, resolve_user_ref, format_user_ref
 
 logger = logging.getLogger(__name__)
 
@@ -161,14 +161,16 @@ async def handle_callback(callback: CallbackQuery, bot) -> None:
             await msg.reply("خطا در ثبت درخواست.", components=kb.back_main())
             return
         try:
+            uref = await resolve_user_ref(uid)
+            emoji = "🎁" if method == "gift" else "💳"
             await bot.send_message(
                 chat_id=config.ADMIN_ID,
                 text=(
-                    f"{'🎁' if method == 'gift' else '💳'} درخواست پرداخت\n\n"
-                    f"کاربر: {uid}\n"
-                    f"پلن: {plan['name']}\n"
-                    f"مبلغ (snapshot): {plan['price']:,}\n"
-                    f"Payment ID: {pid}"
+                    emoji + " درخواست پرداخت\n\n"
+                    + f"کاربر: {uref}\n"
+                    + f"پلن: {plan['name']}\n"
+                    + f"مبلغ (snapshot): {plan['price']:,}\n"
+                    + f"Payment ID: {pid}"
                 ),
                 components=kb.admin_payment_kb(pid),
             )
@@ -625,9 +627,13 @@ async def handle_text_message(message: Message, bot) -> None:
         await clear_state(uid)
         await message.reply(f"✅ تیکت ثبت شد.\nکد: {code}", components=kb.main_menu())
         try:
+            uref = await resolve_user_ref(uid)
+            _u = message.from_user or message.author
+            if _u and getattr(_u, "username", None):
+                uref = format_user_ref(_u.username, uid)
             await bot.send_message(
                 chat_id=config.ADMIN_ID,
-                text=f"🎫 {code}\nuser={uid}\n{cat}\n\n{text[:1500]}",
+                text=f"🎫 {code}\nکاربر: {uref}\n{cat}\n\n{text[:1500]}",
             )
         except Exception:
             pass
@@ -743,9 +749,13 @@ async def _maybe_receipt_photo(message: Message, bot) -> None:
         return
     await message.reply("📸 رسید برای بررسی ارسال شد.", components=kb.back_main())
     try:
+        uref = await resolve_user_ref(uid)
+        uname = getattr(user, "username", None)
+        if uname:
+            uref = format_user_ref(uname, uid)
         await bot.send_message(
             chat_id=config.ADMIN_ID,
-            text=f"📸 رسید پرداخت #{payment_id} از کاربر {uid}",
+            text=f"📸 رسید پرداخت #{payment_id} از {uref}",
             components=kb.admin_receipt_kb(payment_id),
         )
     except Exception:

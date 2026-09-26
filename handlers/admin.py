@@ -10,7 +10,7 @@ import database as db
 import keyboards as kb
 from services import payments as pay_svc
 from services import subscription as sub_svc
-from utils.helpers import is_admin
+from utils.helpers import is_admin, resolve_user_ref
 
 logger = logging.getLogger(__name__)
 
@@ -99,12 +99,14 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
             await msg.reply("پرداخت معلقی نیست.", components=kb.admin_panel_kb())
             return
         for r in rows:
+            uref = await resolve_user_ref(r["user_id"])
             await bot.send_message(
                 chat_id=uid,
                 text=(
                     f"#{r['id']} | {r['method']} | {r['status']}\n"
-                    f"user={r['user_id']} plan={r['plan_name'] or r['plan_key']} "
-                    f"amount={r['amount']:,}"
+                    f"کاربر: {uref}\n"
+                    f"پلن: {r['plan_name'] or r['plan_key']} "
+                    f"مبلغ: {r['amount']:,}"
                 ),
                 components=kb.admin_payment_kb(r["id"]),
             )
@@ -233,9 +235,10 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
             await msg.reply("تیکت بازی نیست.", components=kb.admin_panel_kb())
             return
         for t in rows:
+            uref = await resolve_user_ref(t["user_id"])
             await bot.send_message(
                 chat_id=uid,
-                text=f"{t['ticket_code']} | {t['category']}\nuser={t['user_id']}\n{t['message'][:500]}",
+                text=f"{t['ticket_code']} | {t['category']}\nکاربر: {uref}\n{t['message'][:500]}",
             )
         return
 

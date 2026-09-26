@@ -109,3 +109,32 @@ def format_remaining(expires_at: datetime) -> str:
 
 def is_admin(user_id: int) -> bool:
     return int(user_id) == int(config.ADMIN_ID)
+
+
+def format_user_ref(username: str | None = None, user_id: int | None = None) -> str:
+    """
+    Prefer clickable @username for admin messages.
+    Never show bare numeric id when username is available.
+    """
+    if username:
+        u = str(username).strip().lstrip("@")
+        if u:
+            return f"@{u}"
+    if user_id is not None:
+        return f"کاربر (بدون یوزرنیم)"
+    return "کاربر"
+
+
+async def resolve_user_ref(user_id: int) -> str:
+    """Lookup username from DB; return @username when possible."""
+    try:
+        import database as db
+        row = await db.fetchrow(
+            "SELECT username FROM users WHERE user_id = $1",
+            int(user_id),
+        )
+        if row and row.get("username"):
+            return format_user_ref(row["username"], user_id)
+    except Exception:
+        pass
+    return format_user_ref(None, user_id)
