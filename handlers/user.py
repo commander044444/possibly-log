@@ -483,18 +483,32 @@ async def handle_callback(callback: CallbackQuery, bot) -> None:
                         logger.warning("members_count failed: %s", e)
                 photo = getattr(chat, "photo", None)
                 if photo is not None:
-                    file_id = (
-                        getattr(photo, "big_file_id", None)
-                        or getattr(photo, "small_file_id", None)
-                        or getattr(photo, "file_id", None)
-                    )
-                    if file_id:
+                    # python-bale-bot ChatPhoto: get_big_file() / get_small_file() -> bytes
+                    for method_name in ("get_big_file", "get_small_file"):
+                        meth = getattr(photo, method_name, None)
+                        if meth is None:
+                            continue
                         try:
-                            avatar_bytes = await bot.get_file(file_id)
-                            if not isinstance(avatar_bytes, (bytes, bytearray)):
-                                avatar_bytes = getattr(avatar_bytes, "content", None) or None
+                            data = await meth()
+                            if isinstance(data, (bytes, bytearray)) and len(data) > 100:
+                                avatar_bytes = bytes(data)
+                                logger.info("avatar via %s (%s bytes)", method_name, len(avatar_bytes))
+                                break
                         except Exception as e:
-                            logger.warning("avatar download failed: %s", e)
+                            logger.warning("avatar %s failed: %s", method_name, e)
+                    if avatar_bytes is None:
+                        for attr in ("big_file_id", "small_file_id"):
+                            fid = getattr(photo, attr, None)
+                            if not fid:
+                                continue
+                            try:
+                                data = await bot.get_file(fid)
+                                if isinstance(data, (bytes, bytearray)) and len(data) > 100:
+                                    avatar_bytes = bytes(data)
+                                    logger.info("avatar via get_file(%s) %s bytes", attr, len(avatar_bytes))
+                                    break
+                            except Exception as e:
+                                logger.warning("get_file %s failed: %s", attr, e)
         except Exception:
             logger.exception("live channel meta")
 
