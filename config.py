@@ -9,17 +9,17 @@ import os
 from typing import Dict, Any, List
 
 # ─── Bot ───────────────────────────────────────────────
-BOT_TOKEN = "858228563:_gVyZQIjoAy8ZMw0bsG4JRFDWFC9prRnVNc"
+BOT_TOKEN = "PUT_BOT_TOKEN_HERE"
 ADMIN_ID = 1967315238
 ADMIN_USERNAME = "commander04"  # display as @commander04
 
 # ─── PostgreSQL (PRIMARY) ──────────────────────────────
 # Paste your Railway PostgreSQL URL here:
-POSTGRESQL_URL = "postgresql://postgres:rTzsPViElMQWJWSnYlHLWNWYcQNiwtzl@postgres.railway.internal:5432/railway"
+POSTGRESQL_URL = "PUT_RAILWAY_POSTGRESQL_URL_HERE"
 
 # Fallback only if POSTGRESQL_URL is still the placeholder
 _env_db = os.environ.get("DATABASE_URL", "")
-if POSTGRESQL_URL in ("", "postgresql://postgres:rTzsPViElMQWJWSnYlHLWNWYcQNiwtzl@postgres.railway.internal:5432/railway") and _env_db:
+if POSTGRESQL_URL in ("", "PUT_RAILWAY_POSTGRESQL_URL_HERE") and _env_db:
     POSTGRESQL_URL = _env_db
 
 if POSTGRESQL_URL.startswith("postgres://"):
@@ -30,8 +30,8 @@ DB_POOL_MAX = 10
 DB_COMMAND_TIMEOUT = 30
 
 # ─── Payment ───────────────────────────────────────────
-CARD_NUMBER = "123"
-CARD_HOLDER = "test"
+CARD_NUMBER = "PUT_CARD_NUMBER_HERE"
+CARD_HOLDER = "نام صاحب کارت"
 PAYMENT_REVIEW_NOTE = (
     "توجه:\n"
     "بررسی درخواست شما ممکن است بین ۲۰ دقیقه تا ۲ ساعت طول بکشد؛ "
@@ -129,3 +129,11 @@ VIP_UPGRADE_TEXT = (
 # ─── Logging ───────────────────────────────────────────
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
+
+
+# ─── Static image assets (paths relative to project root) ──
+from pathlib import Path as _Path
+BASE_DIR = _Path(__file__).resolve().parent
+ASSETS_DIR = BASE_DIR / "assets" / "images"
+VIP_BANNER = ASSETS_DIR / "vip_banner.png"
+WELCOME_BANNER = ASSETS_DIR / "welcome_banner.png"  # optional, if added later

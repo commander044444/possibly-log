@@ -22,6 +22,39 @@ from utils.helpers import is_admin, generate_ticket_code, resolve_user_ref, form
 
 logger = logging.getLogger(__name__)
 
+async def _send_local_photo(bot, chat_id: int, path, caption: str = "") -> bool:
+    """Send a local PNG/JPG via python-bale-bot InputFile. Never crash if missing."""
+    try:
+        from pathlib import Path as _P
+        path = _P(path)
+        if not path.is_file():
+            logger.warning("asset missing: %s", path)
+            return False
+        data = path.read_bytes()
+        if len(data) < 100:
+            logger.warning("asset too small: %s", path)
+            return False
+        try:
+            photo = InputFile(data, file_name=path.name)
+        except TypeError:
+            photo = InputFile(data)
+        try:
+            await bot.send_photo(chat_id=chat_id, photo=photo, caption=caption or None)
+            return True
+        except Exception:
+            logger.exception("send_photo asset failed, trying path")
+            try:
+                await bot.send_photo(chat_id=chat_id, photo=InputFile(str(path)), caption=caption or None)
+                return True
+            except Exception:
+                logger.exception("send_photo path also failed")
+                return False
+    except Exception:
+        logger.exception("send local photo")
+        return False
+
+
+
 
 async def set_state(user_id: int, state: str, data: Optional[dict] = None) -> None:
     await db.execute(
@@ -121,7 +154,21 @@ async def handle_callback(callback: CallbackQuery, bot) -> None:
 
     # ── buy VIP
     if data == "pay:menu":
-        await msg.reply("👑 خرید VIP\n\nروش پرداخت را انتخاب کنید:", components=kb.pay_method_kb())
+        sent = await _send_local_photo(
+            bot, uid, config.VIP_BANNER,
+            caption="👑 اشتراک VIP\n\nپلن مورد نظر را انتخاب کنید و کانال خود را حرفه‌ای کنید.",
+        )
+        if not sent:
+            await msg.reply(
+                "👑 خرید VIP\n\nروش پرداخت را انتخاب کنید:",
+                components=kb.pay_method_kb(),
+            )
+        else:
+            await bot.send_message(
+                chat_id=uid,
+                text="روش پرداخت را انتخاب کنید:",
+                components=kb.pay_method_kb(),
+            )
         return
 
     if data.startswith("pay:method:"):
