@@ -1,6 +1,6 @@
 """
-Channel stats image — NO avatar, maximum readable bold type.
-Real data only. Canvas sized for huge mobile-friendly numbers.
+Channel stats — 1080px wide, numbers auto-fit to nearly full card width.
+Maximum practical size on mobile. No avatar. Real data only.
 """
 from __future__ import annotations
 
@@ -14,18 +14,17 @@ import database as db
 
 logger = logging.getLogger(__name__)
 
-# Tall portrait so huge fonts still fit
-W, H = 1080, 1920
+W, H = 1080, 2400  # tall so each block can be huge
 
-BG = (8, 10, 16)
-SURFACE = (22, 26, 40)
-SURFACE2 = (32, 38, 56)
+BG = (6, 8, 14)
+SURFACE = (20, 24, 36)
+SURFACE2 = (30, 36, 52)
 ACCENT = (96, 165, 250)
 GREEN = (52, 211, 153)
 ROSE = (251, 113, 133)
 AMBER = (251, 191, 36)
 TEXT = (255, 255, 255)
-MUTED = (160, 170, 190)
+MUTED = (170, 180, 200)
 
 
 def _fmt(n) -> str:
@@ -121,52 +120,41 @@ async def snapshot_members(channel_id: int, members_count: Optional[int]) -> Non
         logger.warning("snapshot_members: %s", e)
 
 
-def _font_paths():
-    bold_c = [
+def _bold_path():
+    for p in (
         "/usr/share/fonts/SlidesCarnival/google/Cairo/static/Cairo-Bold.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
         "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
-    ]
-    reg_c = [
-        "/usr/share/fonts/SlidesCarnival/google/Cairo/static/Cairo-Regular.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
-    ]
-    bold = next((p for p in bold_c if os.path.exists(p)), None)
-    reg = next((p for p in reg_c if os.path.exists(p)), bold)
-    return reg, bold
+    ):
+        if os.path.exists(p):
+            return p
+    return None
 
 
-def _fonts():
+def _font(size: int):
     from PIL import ImageFont
-    reg, bold = _font_paths()
-
-    def f(size, use_bold=True):
-        path = bold if use_bold else reg
-        try:
-            if path:
-                return ImageFont.truetype(path, size)
-        except Exception:
-            pass
-        return ImageFont.load_default()
-
-    # Extreme sizes for mobile (as large as practical on one screen)
-    return {
-        "title": f(72, True),
-        "uname": f(48, True),
-        "num_hero": f(110, True),
-        "num": f(90, True),
-        "num_md": f(70, True),
-        "label": f(36, True),
-        "section": f(42, True),
-        "tiny": f(30, True),
-    }
+    path = _bold_path()
+    try:
+        if path:
+            return ImageFont.truetype(path, size)
+    except Exception:
+        pass
+    return ImageFont.load_default()
 
 
-def _round(draw, box, r, fill):
-    draw.rounded_rectangle(box, radius=r, fill=fill)
+def _fit_font(draw, text: str, max_width: int, max_size: int, min_size: int = 40):
+    """Grow font until text nearly fills max_width (true max size on 1080)."""
+    size = max_size
+    while size >= min_size:
+        font = _font(size)
+        bbox = draw.textbbox((0, 0), text, font=font)
+        if bbox[2] - bbox[0] <= max_width:
+            return font, bbox[2] - bbox[0], bbox[3] - bbox[1]
+        size -= 4
+    font = _font(min_size)
+    bbox = draw.textbbox((0, 0), text, font=font)
+    return font, bbox[2] - bbox[0], bbox[3] - bbox[1]
 
 
 def _center(draw, text, cy, font, fill, x0, x1):
@@ -176,16 +164,16 @@ def _center(draw, text, cy, font, fill, x0, x1):
     draw.text((x0 + (x1 - x0 - tw) // 2, cy - th // 2), text, font=font, fill=fill)
 
 
-def _chart(series: List[Tuple[Any, int]], w=1000, h=360):
+def _chart(series: List[Tuple[Any, int]], w=1000, h=400):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from PIL import Image
     import numpy as np
 
-    fig, ax = plt.subplots(figsize=(w / 100, h / 100), dpi=140)
-    fig.patch.set_facecolor("#161a28")
-    ax.set_facecolor("#161a28")
+    fig, ax = plt.subplots(figsize=(w / 100, h / 100), dpi=150)
+    fig.patch.set_facecolor("#141824")
+    ax.set_facecolor("#141824")
 
     today = date.today()
     lookup = {d: m for d, m in series}
@@ -194,35 +182,35 @@ def _chart(series: List[Tuple[Any, int]], w=1000, h=360):
     xs = np.arange(30)
 
     if any(ys):
-        ax.fill_between(xs, ys, color="#60A5FA", alpha=0.25)
-        ax.plot(xs, ys, color="#60A5FA", linewidth=5.0, solid_capstyle="round")
+        ax.fill_between(xs, ys, color="#60A5FA", alpha=0.3)
+        ax.plot(xs, ys, color="#60A5FA", linewidth=6.0, solid_capstyle="round")
         peak = int(np.argmax(ys))
-        ax.scatter([peak], [ys[peak]], color="#FB7185", s=120, zorder=5)
+        ax.scatter([peak], [ys[peak]], color="#FB7185", s=160, zorder=5)
         ax.set_xlim(-0.5, 29.5)
         ax.set_ylim(0, max(max(ys) * 1.3, 1))
         ticks = [0, 7, 14, 21, 29]
         ax.set_xticks(ticks)
         ax.set_xticklabels(
             [dates[i].strftime("%m/%d") for i in ticks],
-            color="#A0AABF", fontsize=16, fontweight="bold",
+            color="#AAB4C8", fontsize=18, fontweight="bold",
         )
-        ax.tick_params(axis="y", colors="#A0AABF", labelsize=16)
+        ax.tick_params(axis="y", colors="#AAB4C8", labelsize=18)
         for s in ax.spines.values():
             s.set_color("#3A4158")
-            s.set_linewidth(1.5)
-        ax.grid(axis="y", color="#3A4158", linestyle="--", linewidth=1.0)
+            s.set_linewidth(2)
+        ax.grid(axis="y", color="#3A4158", linestyle="--", linewidth=1.2)
     else:
         ax.text(0.5, 0.5, "No data yet", ha="center", va="center",
-                color="#A0AABF", fontsize=28, fontweight="bold")
+                color="#AAB4C8", fontsize=32, fontweight="bold")
         ax.set_xticks([])
         ax.set_yticks([])
         for s in ax.spines.values():
             s.set_visible(False)
 
-    fig.tight_layout(pad=0.5)
+    fig.tight_layout(pad=0.4)
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=140, facecolor=fig.get_facecolor(),
-                edgecolor="none", bbox_inches="tight", pad_inches=0.15)
+    fig.savefig(buf, format="png", dpi=150, facecolor=fig.get_facecolor(),
+                edgecolor="none", bbox_inches="tight", pad_inches=0.12)
     plt.close(fig)
     buf.seek(0)
     return Image.open(buf).convert("RGBA")
@@ -235,110 +223,97 @@ def render_stats_image(
     *,
     bio: Optional[str] = None,
     members: Optional[int] = None,
-    avatar_bytes: Optional[bytes] = None,  # ignored — avatar removed by design
+    avatar_bytes: Optional[bytes] = None,
     channel_id: Optional[int] = None,
 ) -> bytes:
-    """Huge-type dashboard. Avatar intentionally not rendered."""
     from PIL import Image, ImageDraw
 
-    fonts = _fonts()
     img = Image.new("RGB", (W, H), BG)
     draw = ImageDraw.Draw(img)
-    pad = 36
-    y = 40
+    pad = 28
+    y = 28
+    inner_w = W - 2 * pad - 48  # max text width inside cards
 
-    # ── TITLE ONLY (no avatar) ─────────────────────────
-    _round(draw, (pad, y, W - pad, y + 200), 28, SURFACE)
-    title = (channel_title or "Channel")[:26]
-    _center(draw, title, y + 70, fonts["title"], TEXT, pad, W - pad)
+    # ── CHANNEL NAME (fills width) ─────────────────────
+    hh = 220
+    draw.rounded_rectangle((pad, y, W - pad, y + hh), radius=28, fill=SURFACE)
+    title = (channel_title or "Channel")[:24]
+    font, tw, th = _fit_font(draw, title, inner_w, max_size=120, min_size=48)
+    _center(draw, title, y + 70, font, TEXT, pad, W - pad)
+
     if channel_username:
-        _center(draw, f"@{channel_username}", y + 135, fonts["uname"], ACCENT, pad, W - pad)
+        un = f"@{channel_username}"[:28]
+        font2, _, _ = _fit_font(draw, un, inner_w, max_size=64, min_size=36)
+        _center(draw, un, y + 140, font2, ACCENT, pad, W - pad)
+
     meta = stats.get("report_date", "—")
     if channel_id is not None:
-        meta = f"{meta}  ·  ID {channel_id}"
-    _center(draw, meta, y + 175, fonts["tiny"], MUTED, pad, W - pad)
-    y += 220
+        meta = f"{meta}  ·  {channel_id}"
+    _center(draw, meta, y + 190, _font(28), MUTED, pad, W - pad)
+    y += hh + 20
 
-    # ── MEMBERS HERO ───────────────────────────────────
+    # ── MEMBERS (hero — largest number on image) ───────
     mem = members if members is not None else stats.get("members_now")
-    g7 = stats.get("growth_7d")
-    g30 = stats.get("growth_30d")
+    mem_s = _fmt(mem)
+    hh = 280
+    draw.rounded_rectangle((pad, y, W - pad, y + hh), radius=28, fill=SURFACE)
+    font, _, _ = _fit_font(draw, mem_s, inner_w, max_size=220, min_size=80)
+    _center(draw, mem_s, y + 110, font, TEXT if mem is not None else MUTED, pad, W - pad)
+    _center(draw, "MEMBERS", y + 230, _font(40), MUTED, pad, W - pad)
+    y += hh + 18
 
+    # ── GROWTH ─────────────────────────────────────────
     def gtxt(v):
         if v is None:
             return "—"
         return f"+{v}" if v > 0 else str(v)
 
-    _round(draw, (pad, y, W - pad, y + 200), 28, SURFACE)
-    _center(draw, _fmt(mem), y + 80, fonts["num_hero"], TEXT if mem is not None else MUTED, pad, W - pad)
-    _center(draw, "MEMBERS", y + 160, fonts["label"], MUTED, pad, W - pad)
-    y += 220
-
-    # growth row
-    gap = 16
+    g7, g30 = gtxt(stats.get("growth_7d")), gtxt(stats.get("growth_30d"))
+    gap = 14
     cw = (W - 2 * pad - gap) // 2
-    for i, (val, lbl) in enumerate([(gtxt(g7), "7d GROWTH"), (gtxt(g30), "30d GROWTH")]):
+    for i, (val, lbl) in enumerate([(g7, "7d GROWTH"), (g30, "30d GROWTH")]):
         x0 = pad + i * (cw + gap)
-        _round(draw, (x0, y, x0 + cw, y + 160), 24, SURFACE)
-        _center(draw, val, y + 65, fonts["num"], TEXT if val != "—" else MUTED, x0, x0 + cw)
-        _center(draw, lbl, y + 125, fonts["label"], MUTED, x0, x0 + cw)
-    y += 180
+        draw.rounded_rectangle((x0, y, x0 + cw, y + 220), radius=24, fill=SURFACE)
+        font, _, _ = _fit_font(draw, val, cw - 40, max_size=120, min_size=50)
+        _center(draw, val, y + 90, font, TEXT if val != "—" else MUTED, x0, x0 + cw)
+        _center(draw, lbl, y + 180, _font(32), MUTED, x0, x0 + cw)
+    y += 240
 
-    # ── MESSAGE KPIs ───────────────────────────────────
+    # ── 4 MESSAGE STATS (2×2 grid, huge) ───────────────
     kpis = [
         (_fmt(stats.get("today_messages", 0)), "TODAY", ACCENT),
         (_fmt(stats.get("week_messages", 0)), "7 DAYS", GREEN),
         (_fmt(stats.get("month_messages", 0)), "30 DAYS", ROSE),
         (_fmt(stats.get("total_messages", 0)), "TOTAL", AMBER),
     ]
-    cw = (W - 2 * pad - 3 * gap) // 4
+    cw = (W - 2 * pad - gap) // 2
+    ch = 230
     for i, (val, lbl, color) in enumerate(kpis):
-        x0 = pad + i * (cw + gap)
-        _round(draw, (x0, y, x0 + cw, y + 180), 24, SURFACE)
-        draw.rounded_rectangle((x0 + 14, y + 12, x0 + cw - 14, y + 22), radius=4, fill=color)
-        _center(draw, val, y + 85, fonts["num_md"], TEXT, x0, x0 + cw)
-        _center(draw, lbl, y + 145, fonts["tiny"], MUTED, x0, x0 + cw)
-    y += 200
+        col, row = i % 2, i // 2
+        x0 = pad + col * (cw + gap)
+        y0 = y + row * (ch + gap)
+        draw.rounded_rectangle((x0, y0, x0 + cw, y0 + ch), radius=24, fill=SURFACE)
+        draw.rounded_rectangle((x0 + 20, y0 + 14, x0 + cw - 20, y0 + 26), radius=4, fill=color)
+        font, _, _ = _fit_font(draw, val, cw - 40, max_size=130, min_size=50)
+        _center(draw, val, y0 + 110, font, TEXT, x0, x0 + cw)
+        _center(draw, lbl, y0 + 190, _font(34), MUTED, x0, x0 + cw)
+    y += 2 * (ch + gap) + 6
 
     # ── CHART ──────────────────────────────────────────
-    ch = 400
-    _round(draw, (pad, y, W - pad, y + ch), 28, SURFACE)
-    draw.text((pad + 28, y + 20), "ACTIVITY · 30 DAYS", font=fonts["section"], fill=TEXT)
-    try:
-        chart = _chart(stats.get("daily_series") or [])
-        chart = chart.resize((W - 2 * pad - 40, 320), Image.Resampling.LANCZOS)
-        img.paste(chart, (pad + 20, y + 70), chart)
-    except Exception:
-        logger.exception("chart")
-        _center(draw, "Chart unavailable", y + ch // 2, fonts["label"], MUTED, pad, W - pad)
-    y += ch + 16
-
-    # ── CONTENT (compact but big numbers) ──────────────
-    remain = H - y - 30
-    if remain > 220:
-        _round(draw, (pad, y, W - pad, y + remain), 28, SURFACE)
-        draw.text((pad + 28, y + 16), "CONTENT · 30 DAYS", font=fonts["section"], fill=TEXT)
-        items = [
-            ("TEXT", stats.get("text")),
-            ("PHOTO", stats.get("photo")),
-            ("VIDEO", stats.get("video")),
-            ("VOICE", stats.get("voice")),
-            ("AUDIO", stats.get("audio")),
-            ("GIF", stats.get("gif")),
-            ("FILE", stats.get("file")),
-            ("STICKER", stats.get("sticker")),
-        ]
-        cell_w = (W - 2 * pad - 40) // 4
-        for i, (lbl, val) in enumerate(items):
-            col, rowi = i % 4, i // 4
-            x0 = pad + 20 + col * cell_w
-            y0 = y + 70 + rowi * 100
-            _round(draw, (x0 + 4, y0, x0 + cell_w - 8, y0 + 90), 18, SURFACE2)
-            _center(draw, _fmt(val), y0 + 35, fonts["num_md"], TEXT, x0, x0 + cell_w)
-            _center(draw, lbl, y0 + 72, fonts["tiny"], MUTED, x0, x0 + cell_w)
+    chh = 420
+    if y + chh < H - 40:
+        draw.rounded_rectangle((pad, y, W - pad, y + chh), radius=24, fill=SURFACE)
+        draw.text((pad + 24, y + 18), "ACTIVITY · 30 DAYS", font=_font(36), fill=TEXT)
+        try:
+            chart = _chart(stats.get("daily_series") or [])
+            chart = chart.resize((W - 2 * pad - 36, 340), Image.Resampling.LANCZOS)
+            img.paste(chart, (pad + 18, y + 65), chart)
+        except Exception:
+            logger.exception("chart")
+            _center(draw, "Chart unavailable", y + chh // 2, _font(36), MUTED, pad, W - pad)
 
     out = io.BytesIO()
     img.save(out, format="PNG", optimize=False, compress_level=2)
     data = out.getvalue()
-    logger.info("stats image %d bytes %dx%d (no avatar)", len(data), W, H)
+    logger.info("stats image %d bytes %dx%d fit-font max", len(data), W, H)
     return data
