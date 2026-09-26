@@ -234,15 +234,17 @@ async def handle_callback(callback: CallbackQuery, bot) -> None:
         if not channels:
             await msg.reply("کانالی برای حذف نیست.", components=kb.back_main())
             return
-        rows = [
-            [InlineKeyboardButton(
-                text=f"🗑 {c['channel_title'] or c['channel_id']}",
-                callback_data=f"ch:rm:{c['channel_id']}",
-            )]
-            for c in channels
-        ]
-        rows.append([InlineKeyboardButton(text="🔙 بازگشت", callback_data="menu:main")])
-        await msg.reply("کانال را انتخاب کنید:", components=InlineKeyboardMarkup(inline_keyboard=rows))
+        mk = InlineKeyboardMarkup()
+        for i, c in enumerate(channels, start=1):
+            mk.add(
+                InlineKeyboardButton(
+                    text=f"🗑 {c['channel_title'] or c['channel_id']}",
+                    callback_data=f"ch:rm:{c['channel_id']}",
+                ),
+                row=i,
+            )
+        mk.add(InlineKeyboardButton(text="🔙 بازگشت", callback_data="menu:main"), row=len(channels) + 1)
+        await msg.reply("کانال را انتخاب کنید:", components=mk)
         return
 
     if data.startswith("ch:rm:"):
@@ -430,15 +432,17 @@ async def handle_callback(callback: CallbackQuery, bot) -> None:
         if not channels:
             await msg.reply("کانالی ثبت نشده است.", components=kb.back_main())
             return
-        rows = [
-            [InlineKeyboardButton(
-                text=f"📊 {c['channel_title'] or c['channel_id']}",
-                callback_data=f"stats:show:{c['channel_id']}",
-            )]
-            for c in channels
-        ]
-        rows.append([InlineKeyboardButton(text="🔙 بازگشت", callback_data="menu:main")])
-        await msg.reply("کانال را انتخاب کنید:", components=InlineKeyboardMarkup(inline_keyboard=rows))
+        mk = InlineKeyboardMarkup()
+        for i, c in enumerate(channels, start=1):
+            mk.add(
+                InlineKeyboardButton(
+                    text=f"📊 {c['channel_title'] or c['channel_id']}",
+                    callback_data=f"stats:show:{c['channel_id']}",
+                ),
+                row=i,
+            )
+        mk.add(InlineKeyboardButton(text="🔙 بازگشت", callback_data="menu:main"), row=len(channels) + 1)
+        await msg.reply("کانال را انتخاب کنید:", components=mk)
         return
 
     if data.startswith("stats:show:"):

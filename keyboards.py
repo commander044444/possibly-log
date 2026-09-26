@@ -1,4 +1,4 @@
-"""Inline keyboards for Bale (python-bale-bot UI). FREE and VIP see the same menu."""
+"""Inline keyboards for python-bale-bot 2.5.0 (add + row API)."""
 from __future__ import annotations
 
 from typing import List, Optional
@@ -6,6 +6,15 @@ from typing import List, Optional
 from bale import InlineKeyboardMarkup, InlineKeyboardButton
 
 import config
+
+
+def _markup_from_rows(rows: List[List[InlineKeyboardButton]]) -> InlineKeyboardMarkup:
+    """Build InlineKeyboardMarkup using official .add(..., row=) API (1-based rows)."""
+    mk = InlineKeyboardMarkup()
+    for i, row in enumerate(rows, start=1):
+        for btn in row:
+            mk.add(btn, row=i)
+    return mk
 
 
 def main_menu() -> InlineKeyboardMarkup:
@@ -41,17 +50,17 @@ def main_menu() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="ℹ️ درباره ما", callback_data="about"),
         ],
     ]
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return _markup_from_rows(rows)
 
 
 def back_main() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
+    return _markup_from_rows([
         [InlineKeyboardButton(text="🔙 بازگشت به منو", callback_data="menu:main")]
     ])
 
 
 def vip_upgrade_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
+    return _markup_from_rows([
         [InlineKeyboardButton(text="👑 خرید VIP", callback_data="pay:menu")],
         [InlineKeyboardButton(text="🔙 بازگشت", callback_data="menu:main")],
     ])
@@ -71,11 +80,11 @@ def plans_from_db_kb(plans: list, method: str) -> InlineKeyboardMarkup:
             )
         ])
     rows.append([InlineKeyboardButton(text="🔙 بازگشت", callback_data="pay:menu")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return _markup_from_rows(rows)
 
 
 def pay_method_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
+    return _markup_from_rows([
         [InlineKeyboardButton(text="🎁 پاکت هدیه", callback_data="pay:method:gift")],
         [InlineKeyboardButton(text="💳 کارت به کارت", callback_data="pay:method:card")],
         [InlineKeyboardButton(text="🔙 بازگشت", callback_data="menu:main")],
@@ -83,7 +92,7 @@ def pay_method_kb() -> InlineKeyboardMarkup:
 
 
 def confirm_kb(yes_data: str, no_data: str = "menu:main") -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
+    return _markup_from_rows([
         [
             InlineKeyboardButton(text="✅ بله", callback_data=yes_data),
             InlineKeyboardButton(text="❌ لغو", callback_data=no_data),
@@ -92,7 +101,7 @@ def confirm_kb(yes_data: str, no_data: str = "menu:main") -> InlineKeyboardMarku
 
 
 def admin_payment_kb(payment_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
+    return _markup_from_rows([
         [
             InlineKeyboardButton(text="✅ تایید", callback_data=f"admin:pay:approve:{payment_id}"),
             InlineKeyboardButton(text="❌ رد", callback_data=f"admin:pay:reject:{payment_id}"),
@@ -104,7 +113,7 @@ def admin_payment_kb(payment_id: int) -> InlineKeyboardMarkup:
 
 
 def admin_receipt_kb(payment_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
+    return _markup_from_rows([
         [
             InlineKeyboardButton(text="✅ تایید پرداخت", callback_data=f"admin:rcpt:approve:{payment_id}"),
             InlineKeyboardButton(text="❌ رد پرداخت", callback_data=f"admin:rcpt:reject:{payment_id}"),
@@ -116,7 +125,7 @@ def admin_receipt_kb(payment_id: int) -> InlineKeyboardMarkup:
 
 
 def cancel_kb(data: str = "menu:main") -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
+    return _markup_from_rows([
         [InlineKeyboardButton(text="❌ لغو", callback_data=data)]
     ])
 
@@ -139,7 +148,7 @@ def intervals_kb(intervals: List[int]) -> InlineKeyboardMarkup:
     if row:
         rows.append(row)
     rows.append([InlineKeyboardButton(text="🔙 بازگشت", callback_data="ch:manage")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return _markup_from_rows(rows)
 
 
 def categories_kb(selected: Optional[List[str]] = None, allowed_keys: Optional[List[str]] = None) -> InlineKeyboardMarkup:
@@ -164,7 +173,7 @@ def categories_kb(selected: Optional[List[str]] = None, allowed_keys: Optional[L
         InlineKeyboardButton(text="🗑 پاک کردن", callback_data="cat:clear"),
     ])
     rows.append([InlineKeyboardButton(text="🔙 بازگشت", callback_data="menu:main")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return _markup_from_rows(rows)
 
 
 def support_menu_kb() -> InlineKeyboardMarkup:
@@ -181,7 +190,7 @@ def support_menu_kb() -> InlineKeyboardMarkup:
     ]
     rows = [[InlineKeyboardButton(text=t, callback_data=d)] for t, d in items]
     rows.append([InlineKeyboardButton(text="🔙 بازگشت", callback_data="menu:main")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return _markup_from_rows(rows)
 
 
 def faq_menu_kb() -> InlineKeyboardMarkup:
@@ -197,7 +206,7 @@ def faq_menu_kb() -> InlineKeyboardMarkup:
     ]
     rows = [[InlineKeyboardButton(text=t, callback_data=d)] for t, d in items]
     rows.append([InlineKeyboardButton(text="🔙 بازگشت", callback_data="menu:main")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return _markup_from_rows(rows)
 
 
 def admin_panel_kb() -> InlineKeyboardMarkup:
@@ -216,11 +225,11 @@ def admin_panel_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="❤️ Health", callback_data="admin:health")],
         [InlineKeyboardButton(text="⚙️ تنظیمات", callback_data="admin:settings")],
     ]
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    return _markup_from_rows(rows)
 
 
 def about_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
+    return _markup_from_rows([
         [InlineKeyboardButton(text="👤 @commander04", url="https://ble.ir/commander04")],
         [InlineKeyboardButton(text="⚔️ DARKKNIGHT STUDIO", url="https://ble.ir/darkknight_studio")],
         [InlineKeyboardButton(text="🔙 بازگشت", callback_data="menu:main")],
