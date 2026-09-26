@@ -4,6 +4,7 @@ User handlers — FREE / VIP limit-based (no Trial).
 from __future__ import annotations
 
 import json
+import re
 import logging
 import os
 import tempfile
@@ -202,12 +203,15 @@ async def handle_callback(callback: CallbackQuery, bot) -> None:
         await set_state(uid, "await_channel")
         await msg.reply(
             "➕ اضافه کردن کانال\n\n"
-            "۱. ربات را به کانال اضافه و Admin کنید.\n"
-            "۲. آیدی عددی یا @username کانال را بفرستید.",
+            "۱. ربات را به کانال اضافه کنید و Admin بگذارید\n"
+            "(اجازه ارسال پیام / Post).\n\n"
+            "۲. یکی از این‌ها را بفرستید:\n"
+            "• آیدی عددی کانال\n"
+            "• @username\n"
+            "• یک پیام فورواردشده از همان کانال",
             components=kb.cancel_kb(),
         )
         return
-
     if data == "ch:manage":
         channels = await db.fetch(
             "SELECT * FROM channels WHERE owner_user_id = $1 AND status != 'removed'",
@@ -577,36 +581,39 @@ async def handle_text_message(message: Message, bot) -> None:
         return
 
     if state == "await_channel":
-        await clear_state(uid)
         ok, reason = await sub_svc.can_add_channel(uid)
         if not ok:
+            await clear_state(uid)
             await message.reply(reason, components=kb.vip_upgrade_kb())
             return
-        channel_id = None
-        username = None
-        title = text
-        if text.startswith("@"):
-            username = text[1:]
-        elif text.lstrip("-").isdigit():
-            channel_id = int(text)
+
+        # 1) اگر پیام فوروارد از کانال باشد
+        fwd_chat = getattr(message, "forward_from_chat", None)
+        if fwd_chat is not None:
+            resolved = await _resolve_channel_from_chat_obj(bot, fwd_chat)
         else:
+            resolved = await _resolve_channel_from_text(bot, text)
+
+        if not resolved.get("ok"):
+            # state را نگه می‌داریم تا کاربر دوباره تلاش کند
             await message.reply(
-                "آیدی عددی یا @username بفرستید.",
-                components=kb.back_main(),
+                resolved.get("error")
+                or (
+                    "❌ کانال پیدا نشد.\n\n"
+                    "لطفاً یکی از موارد زیر را بفرستید:\n"
+                    "• آیدی عددی کانال (مثلاً 1234567890)\n"
+                    "• @username کانال\n"
+                    "• یک پیام فوروارد شده از همان کانال\n\n"
+                    "و مطمئن شوید ربات را Admin کرده‌اید و اجازه Post دارد."
+                ),
+                components=kb.cancel_kb(),
             )
             return
-        try:
-            chat = await bot.get_chat(channel_id if channel_id else username)
-            channel_id = int(chat.id)
-            title = getattr(chat, "title", None) or title
-            username = getattr(chat, "username", None) or username
-        except Exception as e:
-            logger.warning("get_chat failed: %s", e)
-            await message.reply(
-                "کانال پیدا نشد یا ربات Admin نیست.",
-                components=kb.back_main(),
-            )
-            return
+
+        await clear_state(uid)
+        channel_id = resolved["channel_id"]
+        title = resolved.get("title") or str(channel_id)
+        username = resolved.get("username")
 
         limits = await sub_svc.get_user_limits(uid)
         default_iv = limits["min_interval_minutes"]
@@ -616,8 +623,8 @@ async def handle_text_message(message: Message, bot) -> None:
                 (channel_id, channel_username, channel_title, owner_user_id, status, is_active, news_interval)
             VALUES ($1, $2, $3, $4, 'registered', FALSE, $5)
             ON CONFLICT (channel_id) DO UPDATE SET
-                channel_username = EXCLUDED.channel_username,
-                channel_title = EXCLUDED.channel_title,
+                channel_username = COALESCE(EXCLUDED.channel_username, channels.channel_username),
+                channel_title = COALESCE(EXCLUDED.channel_title, channels.channel_title),
                 owner_user_id = EXCLUDED.owner_user_id,
                 status = 'registered',
                 updated_at = NOW()
@@ -628,9 +635,20 @@ async def handle_text_message(message: Message, bot) -> None:
             "INSERT INTO channel_settings (channel_id) VALUES ($1) ON CONFLICT DO NOTHING",
             channel_id,
         )
+        admin_note = ""
+        if resolved.get("bot_is_admin") is False:
+            admin_note = (
+                "\n\n⚠️ ربات به‌عنوان Admin تشخیص داده نشد.\n"
+                "برای انتشار اخبار، ربات را Admin کنید و اجازه ارسال پیام بدهید."
+            )
+        elif resolved.get("bot_is_admin") is True:
+            admin_note = "\n\n✅ دسترسی Admin ربات تایید شد."
+
         await message.reply(
             f"✅ کانال «{title}» ثبت شد.\n"
-            f"فاصله پیش‌فرض: {default_iv} دقیقه (پلن {limits['tier']}).\n"
+            f"آیدی: `{channel_id}`\n"
+            f"فاصله پیش‌فرض: {default_iv} دقیقه (پلن {limits['tier']})."
+            f"{admin_note}\n\n"
             "می‌توانید دسته را انتخاب و Start کنید.",
             components=kb.main_menu(),
         )
@@ -679,3 +697,183 @@ async def _maybe_receipt_photo(message: Message, bot) -> None:
         )
     except Exception:
         logger.exception("notify receipt")
+
+
+# ─── Channel resolution helpers (python-bale-bot 2.5.0) ─
+
+_PERSIAN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+
+
+def _normalize_digits(s: str) -> str:
+    return (s or "").translate(_PERSIAN_DIGITS).strip()
+
+
+def _parse_channel_ref(raw: str):
+    """
+    Parse user input into either numeric channel_id or username.
+    Accepts: @name, name, numeric id, ble.ir/name links.
+    """
+    s = _normalize_digits(raw)
+    if not s:
+        return None, None
+
+    # strip common prefixes / urls
+    s = s.replace("https://", "").replace("http://", "")
+    for prefix in ("ble.ir/", "bale.ai/", "t.me/", "telegram.me/"):
+        if prefix in s.lower():
+            s = s.split(prefix, 1)[-1]
+            break
+    s = s.strip().strip("/")
+
+    if s.startswith("@"):
+        s = s[1:]
+
+    # pure numeric (optional leading -)
+    if s.lstrip("-").isdigit():
+        try:
+            return int(s), None
+        except ValueError:
+            return None, None
+
+    # username: letters, digits, underscore
+    if re.fullmatch(r"[A-Za-z0-9_]{3,64}", s):
+        return None, s
+
+    return None, None
+
+
+async def _get_chat_flexible(bot, chat_ref) -> Optional[object]:
+    """Try get_chat with int/str and use_cache=False."""
+    candidates = []
+    if isinstance(chat_ref, int):
+        candidates = [chat_ref, str(chat_ref)]
+    else:
+        candidates = [chat_ref, f"@{chat_ref}" if not str(chat_ref).startswith("@") else chat_ref]
+
+    last_err = None
+    for ref in candidates:
+        try:
+            chat = await bot.get_chat(ref, use_cache=False)
+            if chat is not None:
+                return chat
+        except TypeError:
+            # older signature without use_cache
+            try:
+                chat = await bot.get_chat(ref)
+                if chat is not None:
+                    return chat
+            except Exception as e:
+                last_err = e
+                logger.warning("get_chat(%r) failed: %s", ref, e)
+        except Exception as e:
+            last_err = e
+            logger.warning("get_chat(%r) failed: %s", ref, e)
+    if last_err:
+        logger.warning("get_chat all candidates failed last=%s", last_err)
+    return None
+
+
+async def _check_bot_admin(bot, channel_id) -> Optional[bool]:
+    """Return True/False if checkable, None if unknown."""
+    try:
+        me = bot.user
+        bot_id = getattr(me, "user_id", None) or getattr(me, "id", None)
+        if bot_id is None:
+            return None
+        member = await bot.get_chat_member(channel_id, bot_id)
+        if member is None:
+            return False
+        status = (getattr(member, "status", None) or "").lower()
+        if status in ("administrator", "creator", "admin", "owner"):
+            return True
+        # some Bale builds use can_post_messages
+        if getattr(member, "can_post_messages", None) is True:
+            return True
+        return False
+    except Exception as e:
+        logger.warning("get_chat_member failed for %s: %s", channel_id, e)
+        return None
+
+
+async def _resolve_channel_from_chat_obj(bot, chat_obj) -> dict:
+    try:
+        cid = getattr(chat_obj, "id", None)
+        if cid is None:
+            return {"ok": False, "error": "آیدی کانال از فوروارد خوانده نشد."}
+        channel_id = int(cid)
+        title = getattr(chat_obj, "title", None) or str(channel_id)
+        username = getattr(chat_obj, "username", None)
+        # refresh via API when possible
+        refreshed = await _get_chat_flexible(bot, channel_id)
+        if refreshed is not None:
+            title = getattr(refreshed, "title", None) or title
+            username = getattr(refreshed, "username", None) or username
+            channel_id = int(getattr(refreshed, "id", channel_id))
+        admin = await _check_bot_admin(bot, channel_id)
+        return {
+            "ok": True,
+            "channel_id": channel_id,
+            "title": title,
+            "username": username,
+            "bot_is_admin": admin,
+        }
+    except Exception as e:
+        logger.exception("resolve from forward failed")
+        return {"ok": False, "error": f"خطا در خواندن کانال فوروارد شده: {e}"}
+
+
+async def _resolve_channel_from_text(bot, raw: str) -> dict:
+    channel_id, username = _parse_channel_ref(raw)
+    if channel_id is None and not username:
+        return {
+            "ok": False,
+            "error": (
+                "فرمت نامعتبر است.\n\n"
+                "بفرستید:\n"
+                "• آیدی عددی\n"
+                "• @username\n"
+                "• یا یک پیام فوروارد از کانال"
+            ),
+        }
+
+    ref = channel_id if channel_id is not None else username
+    chat = await _get_chat_flexible(bot, ref)
+
+    if chat is None:
+        # اگر فقط آیدی عددی داده شده، ثبت با همان آیدی (fallback)
+        # چون بعضی کانال‌های Bale با get_chat مشکل دارند ولی send کار می‌کند
+        if channel_id is not None:
+            admin = await _check_bot_admin(bot, channel_id)
+            return {
+                "ok": True,
+                "channel_id": int(channel_id),
+                "title": str(channel_id),
+                "username": None,
+                "bot_is_admin": admin,
+            }
+        return {
+            "ok": False,
+            "error": (
+                "❌ کانال با این @username پیدا نشد.\n\n"
+                "• نام کاربری را دقیق بفرستید\n"
+                "• یا آیدی عددی را بفرستید\n"
+                "• یا یک پست از کانال را برای ربات Forward کنید\n"
+                "• ربات باید عضو/ادمین کانال باشد"
+            ),
+        }
+
+    try:
+        cid = int(getattr(chat, "id"))
+    except Exception:
+        return {"ok": False, "error": "آیدی کانال از پاسخ API قابل خواندن نبود."}
+
+    title = getattr(chat, "title", None) or str(cid)
+    uname = getattr(chat, "username", None) or username
+    admin = await _check_bot_admin(bot, cid)
+    return {
+        "ok": True,
+        "channel_id": cid,
+        "title": title,
+        "username": uname,
+        "bot_is_admin": admin,
+    }
