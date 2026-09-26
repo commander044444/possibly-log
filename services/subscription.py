@@ -311,3 +311,41 @@ async def get_status_text(user_id: int) -> str:
         f"منتشرشده امروز: {used_today}\n\n"
         "برای interval کوتاه و فعالیت 24/7، VIP تهیه کنید."
     )
+
+
+async def set_banned(user_id: int, banned: bool) -> None:
+    try:
+        await db.execute(
+            "UPDATE users SET is_banned = $2, updated_at = NOW() WHERE user_id = $1",
+            int(user_id), bool(banned),
+        )
+    except Exception:
+        await db.execute(
+            "UPDATE users SET is_banned = $2 WHERE user_id = $1",
+            int(user_id), bool(banned),
+        )
+
+
+async def deactivate_subscription(user_id: int) -> bool:
+    """Expire active VIP immediately."""
+    result = await db.execute(
+        """
+        UPDATE subscriptions
+        SET status = 'expired', expires_at = NOW()
+        WHERE user_id = $1 AND status = 'active' AND expires_at > NOW()
+        """,
+        int(user_id),
+    )
+    return True
+
+
+async def gift_plan_to_user(user_id: int, plan_id: int) -> Tuple[bool, str]:
+    plan = await get_plan_by_id(plan_id)
+    if not plan:
+        return False, "پلن یافت نشد."
+    ok = await activate_subscription_from_plan(
+        user_id, plan, payment_method="admin_gift"
+    )
+    if ok:
+        return True, f"VIP «{plan['name']}» برای کاربر فعال شد."
+    return False, "فعال‌سازی ناموفق."

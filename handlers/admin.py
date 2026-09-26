@@ -1,18 +1,101 @@
-"""Admin panel — plans, payments, licenses. Only ADMIN_ID."""
+"""Admin panel — full user management, payments, licenses. Only ADMIN_ID."""
 from __future__ import annotations
 
 import logging
 
-from bale import CallbackQuery
+from bale import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 
 import config
 import database as db
 import keyboards as kb
 from services import payments as pay_svc
 from services import subscription as sub_svc
-from utils.helpers import is_admin, resolve_user_ref
+from utils.helpers import is_admin, resolve_user_ref, format_user_ref
 
 logger = logging.getLogger(__name__)
+
+
+def _admin_users_kb(users: list, page: int = 0, page_size: int = 10) -> InlineKeyboardMarkup:
+    mk = InlineKeyboardMarkup()
+    start = page * page_size
+    chunk = users[start:start + page_size]
+    for i, u in enumerate(chunk, start=1):
+        uid = int(u["user_id"])
+        uname = u.get("username")
+        name = u.get("first_name") or u.get("display_name") or ""
+        label = format_user_ref(uname, uid)
+        if name:
+            label = f"{label} · {name}"[:40]
+        banned = "🚫 " if u.get("is_banned") else ""
+        mk.add(
+            InlineKeyboardButton(text=f"{banned}{label}", callback_data=f"admin:user:{uid}"),
+            row=i,
+        )
+    row = len(chunk) + 1
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="◀️ قبل", callback_data=f"admin:users:p:{page-1}"))
+    if start + page_size < len(users):
+        nav.append(InlineKeyboardButton(text="بعد ▶️", callback_data=f"admin:users:p:{page+1}"))
+    for b in nav:
+        mk.add(b, row=row)
+    mk.add(InlineKeyboardButton(text="🔙 پنل ادمین", callback_data="admin:panel"), row=row + 1)
+    return mk
+
+
+def _user_actions_kb(target_id: int) -> InlineKeyboardMarkup:
+    mk = InlineKeyboardMarkup()
+    mk.add(InlineKeyboardButton(text="🎁 هدیه VIP", callback_data=f"admin:ugift:{target_id}"), row=1)
+    mk.add(InlineKeyboardButton(text="✅ فعال‌سازی اشتراک", callback_data=f"admin:uact:{target_id}"), row=2)
+    mk.add(InlineKeyboardButton(text="⏹ قطع اشتراک", callback_data=f"admin:udeact:{target_id}"), row=3)
+    mk.add(InlineKeyboardButton(text="🚫 بن", callback_data=f"admin:uban:{target_id}"), row=4)
+    mk.add(InlineKeyboardButton(text="🟢 آنبن", callback_data=f"admin:uunban:{target_id}"), row=5)
+    mk.add(InlineKeyboardButton(text="💬 پیام به کاربر", callback_data=f"admin:umsg:{target_id}"), row=6)
+    mk.add(InlineKeyboardButton(text="📺 کانال‌های کاربر", callback_data=f"admin:uch:{target_id}"), row=7)
+    mk.add(InlineKeyboardButton(text="🔙 لیست کاربران", callback_data="admin:users"), row=8)
+    return mk
+
+
+def _gift_plans_kb(target_id: int, plans: list) -> InlineKeyboardMarkup:
+    mk = InlineKeyboardMarkup()
+    for i, p in enumerate(plans, start=1):
+        mk.add(
+            InlineKeyboardButton(
+                text=f"{p['name']} ({p['duration_days']}روز)",
+                callback_data=f"admin:ugiftgo:{target_id}:{p['id']}",
+            ),
+            row=i,
+        )
+    mk.add(InlineKeyboardButton(text="🔙 بازگشت", callback_data=f"admin:user:{target_id}"), row=len(plans) + 1)
+    return mk
+
+
+async def _user_detail_text(target_id: int) -> str:
+    row = await db.fetchrow("SELECT * FROM users WHERE user_id = $1", target_id)
+    if not row:
+        return f"کاربر {target_id} در دیتابیس نیست."
+    uref = format_user_ref(row.get("username"), target_id)
+    tier = await sub_svc.get_access_tier(target_id)
+    sub = await sub_svc.get_active_subscription(target_id)
+    ch_count = await db.fetchval(
+        "SELECT COUNT(*) FROM channels WHERE owner_user_id = $1 AND status != 'removed'",
+        target_id,
+    )
+    banned = "بله 🚫" if row.get("is_banned") else "خیر"
+    lines = [
+        "👤 جزئیات کاربر\n",
+        f"شناسه نمایشی: {uref}",
+        f"نام: {row.get('first_name') or '—'} {row.get('last_name') or ''}".strip(),
+        f"وضعیت بن: {banned}",
+        f"سطح: {tier}",
+        f"کانال‌ها: {ch_count}",
+    ]
+    if sub:
+        lines.append(f"پلن: {sub.get('plan_name') or sub.get('plan_key')}")
+        lines.append(f"پایان اشتراک: {sub.get('expires_at')}")
+    else:
+        lines.append("اشتراک فعال: ندارد")
+    return "\n".join(lines)
 
 
 async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
@@ -22,6 +105,155 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
         return
     msg = callback.message
     uid = int(user.user_id)
+
+    if data in ("admin:panel", "admin:menu"):
+        await msg.reply("🛠 پنل مدیریت", components=kb.admin_panel_kb())
+        return
+
+    # ── users list ──────────────────────────────────────
+    if data == "admin:users" or data.startswith("admin:users:p:"):
+        page = 0
+        if data.startswith("admin:users:p:"):
+            try:
+                page = int(data.split(":")[-1])
+            except ValueError:
+                page = 0
+        users = await db.fetch(
+            """
+            SELECT user_id, username, first_name, last_name, display_name, is_banned, last_seen
+            FROM users
+            ORDER BY last_seen DESC NULLS LAST, user_id DESC
+            LIMIT 200
+            """
+        )
+        users = [dict(u) for u in users]
+        if not users:
+            await msg.reply("کاربری ثبت نشده.", components=kb.admin_panel_kb())
+            return
+        total = len(users)
+        await msg.reply(
+            f"👥 کاربران (نمایش تا ۲۰۰ نفر | مجموع این لیست: {total})\n"
+            "روی هر کاربر بزنید:",
+            components=_admin_users_kb(users, page=page),
+        )
+        return
+
+    if data.startswith("admin:user:"):
+        target = int(data.split(":")[-1])
+        text = await _user_detail_text(target)
+        await msg.reply(text, components=_user_actions_kb(target))
+        return
+
+    if data.startswith("admin:uban:"):
+        target = int(data.split(":")[-1])
+        await sub_svc.set_banned(target, True)
+        # stop their channels
+        await db.execute(
+            "UPDATE channels SET is_active = FALSE WHERE owner_user_id = $1",
+            target,
+        )
+        try:
+            await bot.send_message(chat_id=target, text="🚫 حساب شما توسط مدیریت مسدود شد.")
+        except Exception:
+            pass
+        await msg.reply(f"کاربر بن شد.\n{await resolve_user_ref(target)}", components=_user_actions_kb(target))
+        return
+
+    if data.startswith("admin:uunban:"):
+        target = int(data.split(":")[-1])
+        await sub_svc.set_banned(target, False)
+        try:
+            await bot.send_message(chat_id=target, text="🟢 مسدودیت حساب شما برداشته شد.")
+        except Exception:
+            pass
+        await msg.reply(f"آنبن شد.\n{await resolve_user_ref(target)}", components=_user_actions_kb(target))
+        return
+
+    if data.startswith("admin:udeact:"):
+        target = int(data.split(":")[-1])
+        await sub_svc.deactivate_subscription(target)
+        await db.execute(
+            "UPDATE channels SET is_active = FALSE, status = 'registered' WHERE owner_user_id = $1",
+            target,
+        )
+        try:
+            await bot.send_message(chat_id=target, text="⏹ اشتراک VIP شما توسط مدیریت قطع شد.")
+        except Exception:
+            pass
+        await msg.reply("اشتراک قطع شد.", components=_user_actions_kb(target))
+        return
+
+    if data.startswith("admin:uact:") or data.startswith("admin:ugift:"):
+        # show plan picker (same UI)
+        target = int(data.split(":")[-1])
+        plans = await db.fetch(
+            "SELECT * FROM plans WHERE enabled = TRUE ORDER BY price ASC"
+        )
+        if not plans:
+            await msg.reply("پلن فعالی نیست.", components=_user_actions_kb(target))
+            return
+        await msg.reply(
+            f"پلن هدیه برای {await resolve_user_ref(target)} را انتخاب کنید:",
+            components=_gift_plans_kb(target, [dict(p) for p in plans]),
+        )
+        return
+
+    if data.startswith("admin:ugiftgo:"):
+        parts = data.split(":")
+        target = int(parts[2])
+        plan_id = int(parts[3])
+        ok, info = await sub_svc.gift_plan_to_user(target, plan_id)
+        if ok:
+            try:
+                await bot.send_message(
+                    chat_id=target,
+                    text=f"🎁 {info}\nاز بخش وضعیت اشتراک می‌توانید ببینید.",
+                )
+            except Exception:
+                pass
+        await msg.reply(info if ok else f"❌ {info}", components=_user_actions_kb(target))
+        return
+
+    if data.startswith("admin:uch:"):
+        target = int(data.split(":")[-1])
+        rows = await db.fetch(
+            """
+            SELECT channel_id, channel_title, channel_username, is_active, status, news_interval
+            FROM channels WHERE owner_user_id = $1 AND status != 'removed'
+            ORDER BY created_at DESC NULLS LAST
+            """,
+            target,
+        )
+        if not rows:
+            await msg.reply("کانالی ندارد.", components=_user_actions_kb(target))
+            return
+        lines = [f"📺 کانال‌های {await resolve_user_ref(target)}\n"]
+        for r in rows:
+            st = "🟢" if r["is_active"] else "⚪"
+            lines.append(
+                f"{st} {r['channel_title'] or r['channel_id']} "
+                f"(@{r['channel_username'] or '—'}) iv={r['news_interval']}m"
+            )
+        await msg.reply("\n".join(lines), components=_user_actions_kb(target))
+        return
+
+    if data.startswith("admin:umsg:"):
+        target = int(data.split(":")[-1])
+        from handlers.user import set_state
+        await set_state(uid, "admin_msg_user", {"target_id": target})
+        await msg.reply(
+            f"پیام خود را برای {await resolve_user_ref(target)} بفرستید:\n(یا /cancel)",
+            components=kb.cancel_kb("admin:users"),
+        )
+        return
+
+    # ── legacy ban/unban entry points → redirect to users list
+    if data in ("admin:ban", "admin:unban"):
+        await msg.reply(
+            "از «👥 کاربران» کاربر را انتخاب کنید و بن/آنبن بزنید.",
+            components=kb.admin_panel_kb(),
+        )
+        return
 
     if data == "admin:stats":
         users = await db.fetchval("SELECT COUNT(*) FROM users")
@@ -70,7 +302,7 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
     if data == "admin:plans":
         plans = await db.fetch("SELECT * FROM plans ORDER BY id")
         if not plans:
-            await msg.reply("پلنی نیست. از seed migration یا SQL اضافه کنید.", components=kb.admin_panel_kb())
+            await msg.reply("پلنی نیست.", components=kb.admin_panel_kb())
             return
         lines = ["💳 پلن‌ها\n"]
         for p in plans:
@@ -79,11 +311,6 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
                 f"{st} #{p['id']} {p['name']} | {p['price']:,}ت | {p['duration_days']}روز | "
                 f"ch={p['max_channels']} iv={p['min_interval_minutes']}m"
             )
-        lines.append(
-            "\nبرای ایجاد/ویرایش از SQL یا توسعه state-based استفاده کنید:\n"
-            "INSERT INTO plans (name, slug, description, price, duration_days, "
-            "max_channels, min_interval_minutes, max_news_per_day, max_sources, enabled) VALUES (...)"
-        )
         await msg.reply("\n".join(lines), components=kb.admin_panel_kb())
         return
 
@@ -120,9 +347,6 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
             return
         if pay["method"] == "gift":
             ok, err = await pay_svc.transition_payment(pid, "approved")
-            if not ok:
-                # try from pending
-                ok, err = await pay_svc.transition_payment(pid, "approved")
             if not ok:
                 await msg.reply(err)
                 return
@@ -216,15 +440,28 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
         await msg.reply(f"رسید رد شد #{pid}" if ok else err)
         return
 
-    if data == "admin:users":
-        total = await db.fetchval("SELECT COUNT(*) FROM users")
-        await msg.reply(f"تعداد کاربران: {total}", components=kb.admin_panel_kb())
-        return
-
     if data == "admin:channels":
-        total = await db.fetchval("SELECT COUNT(*) FROM channels WHERE status != 'removed'")
-        active = await db.fetchval("SELECT COUNT(*) FROM channels WHERE is_active")
-        await msg.reply(f"کانال‌ها: {total} | فعال: {active}", components=kb.admin_panel_kb())
+        rows = await db.fetch(
+            """
+            SELECT c.*, u.username AS owner_username
+            FROM channels c
+            LEFT JOIN users u ON u.user_id = c.owner_user_id
+            WHERE c.status != 'removed'
+            ORDER BY c.is_active DESC, c.channel_id DESC
+            LIMIT 40
+            """
+        )
+        if not rows:
+            await msg.reply("کانالی نیست.", components=kb.admin_panel_kb())
+            return
+        lines = ["📺 کانال‌ها\n"]
+        for r in rows:
+            st = "🟢" if r["is_active"] else "⚪"
+            owner = format_user_ref(r.get("owner_username"), r["owner_user_id"])
+            lines.append(
+                f"{st} {r['channel_title'] or r['channel_id']} | owner={owner}"
+            )
+        await msg.reply("\n".join(lines)[:3900], components=kb.admin_panel_kb())
         return
 
     if data == "admin:tickets":
@@ -251,14 +488,42 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
         await msg.reply("منابع:\n" + ("\n".join(lines) or "خالی"), components=kb.admin_panel_kb())
         return
 
-    if data in (
-        "admin:ban", "admin:unban", "admin:broadcast",
-        "admin:licenses", "admin:settings",
-    ):
+    if data == "admin:licenses":
+        rows = await db.fetch(
+            """
+            SELECT id, user_id, plan_key, status, created_at, used_at
+            FROM licenses ORDER BY id DESC LIMIT 20
+            """
+        )
+        if not rows:
+            await msg.reply("لایسنسی نیست.", components=kb.admin_panel_kb())
+            return
+        lines = ["🔑 آخرین لایسنس‌ها\n"]
+        for r in rows:
+            uref = await resolve_user_ref(r["user_id"]) if r["user_id"] else "—"
+            lines.append(f"#{r['id']} {r['status']} | {uref} | {r['plan_key']}")
+        await msg.reply("\n".join(lines), components=kb.admin_panel_kb())
+        return
+
+    if data == "admin:broadcast":
+        from handlers.user import set_state
+        await set_state(uid, "admin_broadcast", {})
         await msg.reply(
-            "این بخش از طریق دیتابیس/توسعه بعدی قابل گسترش است.\n"
-            "Ban: UPDATE users SET is_banned=TRUE WHERE user_id=...\n"
-            "تنظیم FREE limits: system_settings keys free_max_channels, free_min_interval, ...",
+            "📢 متن Broadcast را بفرستید (به همه کاربران):\n/cancel برای لغو",
+            components=kb.cancel_kb("admin:panel"),
+        )
+        return
+
+    if data == "admin:settings":
+        card, holder = await pay_svc.get_card_settings()
+        await msg.reply(
+            "⚙️ تنظیمات\n\n"
+            f"کارت: {card}\n"
+            f"صاحب حساب: {holder}\n"
+            f"Admin: {config.ADMIN_USERNAME}\n"
+            f"FREE max channels: {config.FREE_MAX_CHANNELS}\n"
+            f"FREE min interval: {config.FREE_MIN_NEWS_INTERVAL_MINUTES}m\n"
+            f"FREE max news/day: {config.FREE_MAX_NEWS_PER_DAY}",
             components=kb.admin_panel_kb(),
         )
         return

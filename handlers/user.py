@@ -463,7 +463,6 @@ async def handle_callback(callback: CallbackQuery, bot) -> None:
 
         await msg.reply("⏳ در حال ساخت گزارش تصویری…")
 
-        # live channel meta (members / bio / avatar) — never invent numbers
         members = None
         bio = row.get("channel_bio")
         avatar_bytes = None
@@ -482,7 +481,6 @@ async def handle_callback(callback: CallbackQuery, bot) -> None:
                         members = await bot.get_chat_members_count(str(cid))
                     except Exception as e:
                         logger.warning("members_count failed: %s", e)
-                # avatar
                 photo = getattr(chat, "photo", None)
                 if photo is not None:
                     file_id = (
@@ -494,7 +492,6 @@ async def handle_callback(callback: CallbackQuery, bot) -> None:
                         try:
                             avatar_bytes = await bot.get_file(file_id)
                             if not isinstance(avatar_bytes, (bytes, bytearray)):
-                                # some builds return a File object
                                 avatar_bytes = getattr(avatar_bytes, "content", None) or None
                         except Exception as e:
                             logger.warning("avatar download failed: %s", e)
@@ -505,36 +502,97 @@ async def handle_callback(callback: CallbackQuery, bot) -> None:
             await stats_svc.snapshot_members(cid, members)
 
         summary = await stats_svc.get_channel_stats_summary(cid)
-        png = stats_svc.render_stats_image(
-            title,
-            uname,
-            summary,
-            bio=bio,
-            members=members,
-            avatar_bytes=avatar_bytes,
-        )
-        path = None
         try:
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-                f.write(png)
-                path = f.name
-            await bot.send_photo(
-                chat_id=uid,
-                photo=InputFile(path),
-                caption=f"📊 آمار «{title}»",
+            png = stats_svc.render_stats_image(
+                title, uname, summary,
+                bio=bio, members=members, avatar_bytes=avatar_bytes,
             )
         except Exception:
-            logger.exception("send stats")
-            await msg.reply(
-                f"امروز: {summary['today_messages']} | هفته: {summary['week_messages']} | ماه: {summary['month_messages']}",
-                components=kb.back_main(),
-            )
-        finally:
-            if path:
+            logger.exception("render stats image")
+            png = None
+
+        sent = False
+        if png:
+            # official API: InputFile(bytes) or path string for reply_photo
+            try:
+                photo_obj = InputFile(png, file_name="stats.png")
+            except TypeError:
                 try:
-                    os.unlink(path)
+                    photo_obj = InputFile(png)
                 except Exception:
-                    pass
+                    photo_obj = None
+            if photo_obj is not None:
+                try:
+                    await bot.send_photo(
+                        chat_id=uid,
+                        photo=photo_obj,
+                        caption=f"📊 آمار «{title}»",
+                    )
+                    sent = True
+                except Exception:
+                    logger.exception("send_photo InputFile bytes")
+                if not sent:
+                    try:
+                        await msg.reply_photo(
+                            photo=photo_obj,
+                            caption=f"📊 آمار «{title}»",
+                        )
+                        sent = True
+                    except Exception:
+                        logger.exception("reply_photo InputFile")
+            if not sent:
+                path = None
+                try:
+                    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+                        f.write(png)
+                        path = f.name
+                    try:
+                        await bot.send_photo(
+                            chat_id=uid,
+                            photo=InputFile(path),
+                            caption=f"📊 آمار «{title}»",
+                        )
+                        sent = True
+                    except Exception:
+                        logger.exception("send_photo path")
+                    if not sent:
+                        try:
+                            await msg.reply_photo(
+                                photo=path,
+                                caption=f"📊 آمار «{title}»",
+                            )
+                            sent = True
+                        except Exception:
+                            logger.exception("reply_photo path")
+                finally:
+                    if path:
+                        try:
+                            os.unlink(path)
+                        except Exception:
+                            pass
+
+        if not sent:
+            # full text report (not a stub)
+            s = summary
+            text = (
+                f"📊 آمار «{title}»\n"
+                + (f"@{uname}\n" if uname else "")
+                + f"\n📅 گزارش: {s.get('report_date', '—')}\n"
+                f"👥 اعضا: {s.get('members_now') if s.get('members_now') is not None else (members if members is not None else 'N/A')}\n"
+                f"+7d: {s.get('joined_7d') if s.get('joined_7d') is not None else 'N/A'} | "
+                f"-7d: {s.get('left_7d') if s.get('left_7d') is not None else 'N/A'}\n"
+                f"+30d: {s.get('joined_30d') if s.get('joined_30d') is not None else 'N/A'} | "
+                f"-30d: {s.get('left_30d') if s.get('left_30d') is not None else 'N/A'}\n\n"
+                f"📨 امروز: {s.get('today_messages', 0)}\n"
+                f"📨 ۷ روز: {s.get('week_messages', 0)}\n"
+                f"📨 ۳۰ روز: {s.get('month_messages', 0)}\n"
+                f"📨 کل ثبت‌شده: {s.get('total_messages', 0)}\n\n"
+                f"متن: {s.get('text', 0)} | عکس: {s.get('photo', 0)} | ویدیو: {s.get('video', 0)}\n"
+                f"GIF: {s.get('gif', 0)} | ویس: {s.get('voice', 0)} | صوت: {s.get('audio', 0)}\n"
+                f"فایل: {s.get('file', 0)} | استیکر: {s.get('sticker', 0)}\n\n"
+                "⚠️ ارسال تصویر در این محیط ناموفق بود؛ گزارش متنی کامل بالا است."
+            )
+            await msg.reply(text, components=kb.back_main())
         return
 
     if data == "support:menu":
@@ -594,6 +652,40 @@ async def handle_text_message(message: Message, bot) -> None:
         return
     uid = int(user.user_id)
     text = (message.content or message.text or "").strip()
+
+    # admin compose message / broadcast
+    state, data = await get_state(uid)
+    if state == "admin_msg_user" and is_admin(uid):
+        target = (data or {}).get("target_id")
+        if text in ("/cancel", "لغو"):
+            await clear_state(uid)
+            await message.reply("لغو شد.", components=kb.admin_panel_kb() if hasattr(kb, "admin_panel_kb") else kb.back_main())
+            return
+        if target:
+            try:
+                await bot.send_message(chat_id=int(target), text=f"📨 پیام مدیریت:\n\n{text}")
+                await message.reply("✅ ارسال شد.", components=kb.admin_panel_kb())
+            except Exception as e:
+                await message.reply(f"ارسال ناموفق: {e}")
+            await clear_state(uid)
+            return
+    if state == "admin_broadcast" and is_admin(uid):
+        if text in ("/cancel", "لغو"):
+            await clear_state(uid)
+            await message.reply("لغو شد.", components=kb.admin_panel_kb())
+            return
+        users = await db.fetch("SELECT user_id FROM users WHERE COALESCE(is_banned, FALSE) = FALSE")
+        ok = fail = 0
+        for u in users:
+            try:
+                await bot.send_message(chat_id=int(u["user_id"]), text=f"📢 پیام مدیریت:\n\n{text}")
+                ok += 1
+            except Exception:
+                fail += 1
+        await clear_state(uid)
+        await message.reply(f"Broadcast تمام شد. موفق: {ok} | ناموفق: {fail}", components=kb.admin_panel_kb())
+        return
+
 
     if text.startswith("/start"):
         await handle_start(message)
