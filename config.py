@@ -10,8 +10,8 @@ from typing import Dict, Any, List
 
 # ─── Bot ───────────────────────────────────────────────
 BOT_TOKEN = "858228563:_gVyZQIjoAy8ZMw0bsG4JRFDWFC9prRnVNc"
-ADMIN_ID = 1967315238
-ADMIN_USERNAME = "commander04"  # display as @commander04
+ADMIN_ID = 1967315238, 595450272
+ADMIN_USERNAME = "commander04, pv_ahzar"  # display as @commander04
 
 # ─── PostgreSQL (PRIMARY) ──────────────────────────────
 # Paste your Railway PostgreSQL URL here:
@@ -30,8 +30,8 @@ DB_POOL_MAX = 10
 DB_COMMAND_TIMEOUT = 30
 
 # ─── Payment ───────────────────────────────────────────
-CARD_NUMBER = "PUT_CARD_NUMBER_HERE"
-CARD_HOLDER = "نام صاحب کارت"
+CARD_NUMBER = "6219861958356742"
+CARD_HOLDER = "آرتین گلستانی"
 PAYMENT_REVIEW_NOTE = (
     "توجه:\n"
     "بررسی درخواست شما ممکن است بین ۲۰ دقیقه تا ۲ ساعت طول بکشد؛ "
