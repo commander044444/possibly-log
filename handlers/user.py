@@ -1007,6 +1007,72 @@ async def handle_text_message(message: Message, bot) -> None:
         return
 
 
+async def _download_receipt_bytes(bot, message: Message) -> tuple[bytes | None, str, str | None]:
+    """
+    Download receipt image temporarily.
+    Returns (bytes, filename, file_id).
+    Supports message.photos and message.document (image/*).
+    """
+    file_id = None
+    filename = "receipt.jpg"
+    photo_obj = None
+
+    photos = getattr(message, "photos", None) or []
+    if photos:
+        # largest size is last
+        photo_obj = photos[-1]
+        file_id = getattr(photo_obj, "file_id", None) or str(photo_obj)
+        filename = "receipt.jpg"
+
+    doc = getattr(message, "document", None)
+    if not file_id and doc is not None:
+        mime = (getattr(doc, "mime_type", None) or "").lower()
+        name = getattr(doc, "file_name", None) or "receipt.bin"
+        if mime.startswith("image/") or str(name).lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+            file_id = getattr(doc, "file_id", None) or str(doc)
+            photo_obj = doc
+            low = str(name).lower()
+            if low.endswith(".png"):
+                filename = "receipt.png"
+            elif low.endswith(".jpeg"):
+                filename = "receipt.jpeg"
+            elif low.endswith(".webp"):
+                filename = "receipt.webp"
+            else:
+                filename = "receipt.jpg"
+
+    if not file_id:
+        return None, filename, None
+
+    data = None
+    # 1) BaseFile.get() if available on photo object
+    getm = getattr(photo_obj, "get", None) if photo_obj is not None else None
+    if callable(getm):
+        try:
+            data = await getm()
+        except Exception as e:
+            logger.warning("receipt photo.get failed: %s", e)
+
+    # 2) bot.get_file(file_id) → bytes
+    if not isinstance(data, (bytes, bytearray)) or len(data) < 20:
+        try:
+            data = await bot.get_file(str(file_id))
+        except Exception as e:
+            logger.warning("receipt bot.get_file failed: %s", e)
+            data = None
+
+    if isinstance(data, (bytes, bytearray)) and len(data) > 20:
+        # sniff format from magic bytes
+        b = bytes(data)
+        if b[:8] == b"\x89PNG\r\n\x1a\n":
+            filename = "receipt.png"
+        elif b[:2] == b"\xff\xd8":
+            filename = "receipt.jpg"
+        return b, filename, str(file_id)
+
+    return None, filename, str(file_id)
+
+
 async def _maybe_receipt_photo(message: Message, bot) -> None:
     user = message.from_user or message.author
     if not user:
@@ -1019,37 +1085,75 @@ async def _maybe_receipt_photo(message: Message, bot) -> None:
     if not payment_id:
         await clear_state(uid)
         return
-    photos = getattr(message, "photos", None) or []
-    file_id = None
-    if photos:
-        file_id = getattr(photos[-1], "file_id", None) or str(photos[-1])
-    if not file_id:
-        await message.reply("عکس معتبر دریافت نشد.")
+
+    img_bytes, filename, file_id = await _download_receipt_bytes(bot, message)
+    if not file_id and not img_bytes:
+        await message.reply(
+            "عکس معتبر دریافت نشد.\n"
+            "اسکرین‌شات را به‌صورت Photo یا فایل PNG/JPG بفرستید."
+        )
         return
+
     ok, _ = await pay_svc.transition_payment(
-        payment_id, "under_review", receipt_file_id=str(file_id)
+        payment_id, "under_review", receipt_file_id=str(file_id or "uploaded")
     )
     await clear_state(uid)
     if not ok:
         await message.reply("وضعیت درخواست قابل به‌روزرسانی نیست.", components=kb.back_main())
         return
     await message.reply("📸 رسید برای بررسی ارسال شد.", components=kb.back_main())
+
     try:
         uref = await resolve_user_ref(uid)
         uname = getattr(user, "username", None)
         if uname:
             uref = format_user_ref(uname, uid)
         from utils.helpers import list_admin_ids_with_perm
-        note = f"📸 رسید پرداخت #{payment_id} از {uref}"
-        for aid in await list_admin_ids_with_perm("can_payments"):
+        caption = (
+            f"📸 رسید پرداخت #{payment_id}\n"
+            f"کاربر: {uref}\n"
+            f"فایل: {filename}"
+        )
+        admin_ids = await list_admin_ids_with_perm("can_payments")
+        for aid in admin_ids:
             try:
-                await bot.send_message(
-                    chat_id=aid,
-                    text=note,
-                    components=kb.admin_receipt_kb(payment_id),
-                )
+                sent = False
+                # preferred: re-upload real image bytes to admin
+                if img_bytes:
+                    try:
+                        photo = InputFile(img_bytes, file_name=filename)
+                    except TypeError:
+                        photo = InputFile(img_bytes)
+                    try:
+                        await bot.send_photo(
+                            chat_id=aid,
+                            photo=photo,
+                            caption=caption,
+                            components=kb.admin_receipt_kb(payment_id),
+                        )
+                        sent = True
+                    except Exception as e:
+                        logger.warning("send_photo bytes to admin %s: %s", aid, e)
+                # fallback: reuse file_id on Bale servers
+                if not sent and file_id:
+                    try:
+                        await bot.send_photo(
+                            chat_id=aid,
+                            photo=InputFile(str(file_id)),
+                            caption=caption,
+                            components=kb.admin_receipt_kb(payment_id),
+                        )
+                        sent = True
+                    except Exception as e:
+                        logger.warning("send_photo file_id to admin %s: %s", aid, e)
+                if not sent:
+                    await bot.send_message(
+                        chat_id=aid,
+                        text=caption + "\n(ارسال تصویر ناموفق بود)",
+                        components=kb.admin_receipt_kb(payment_id),
+                    )
             except Exception:
-                pass
+                logger.exception("notify receipt to admin %s", aid)
     except Exception:
         logger.exception("notify receipt")
 
