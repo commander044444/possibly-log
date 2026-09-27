@@ -107,8 +107,28 @@ def format_remaining(expires_at: datetime) -> str:
     return " و ".join(parts) if parts else "کمتر از یک دقیقه"
 
 
-def is_admin(user_id: int) -> bool:
+def is_super_admin(user_id: int) -> bool:
+    """Owner from config.py — cannot be removed."""
     return int(user_id) == int(config.ADMIN_ID)
+
+
+async def is_admin(user_id: int) -> bool:
+    """True if config owner OR active row in bot_admins."""
+    uid = int(user_id)
+    if uid == int(config.ADMIN_ID):
+        return True
+    try:
+        import database as db
+        row = await db.fetchrow(
+            """
+            SELECT 1 FROM bot_admins
+            WHERE user_id = $1 AND is_active = TRUE AND COALESCE(is_banned, FALSE) = FALSE
+            """,
+            uid,
+        )
+        return row is not None
+    except Exception:
+        return False
 
 
 def format_user_ref(username: str | None = None, user_id: int | None = None) -> str:

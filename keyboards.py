@@ -212,13 +212,13 @@ def faq_menu_kb() -> InlineKeyboardMarkup:
 def admin_panel_kb() -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text="👥 کاربران", callback_data="admin:users")],
+        [InlineKeyboardButton(text="🛡 ادمین‌ها", callback_data="admin:admins")],
         [InlineKeyboardButton(text="📺 کانال‌ها", callback_data="admin:channels")],
-        [InlineKeyboardButton(text="💳 مدیریت اشتراک‌ها", callback_data="admin:plans")],
+        [InlineKeyboardButton(text="💳 پلن‌ها و قیمت‌ها", callback_data="admin:plans")],
+        [InlineKeyboardButton(text="💳 شماره کارت", callback_data="admin:card")],
         [InlineKeyboardButton(text="💰 پرداخت‌ها", callback_data="admin:payments")],
         [InlineKeyboardButton(text="🔑 لایسنس‌ها", callback_data="admin:licenses")],
         [InlineKeyboardButton(text="📢 Broadcast", callback_data="admin:broadcast")],
-        [InlineKeyboardButton(text="🛡 Ban", callback_data="admin:ban")],
-        [InlineKeyboardButton(text="🟢 Unban", callback_data="admin:unban")],
         [InlineKeyboardButton(text="📊 آمار سیستم", callback_data="admin:stats")],
         [InlineKeyboardButton(text="📰 منابع خبری", callback_data="admin:sources")],
         [InlineKeyboardButton(text="🎫 تیکت‌ها", callback_data="admin:tickets")],

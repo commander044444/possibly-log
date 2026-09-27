@@ -348,6 +348,19 @@ CREATE TABLE IF NOT EXISTS admin_logs (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- bot admins (editable from /admin; config.ADMIN_ID is always super)
+CREATE TABLE IF NOT EXISTS bot_admins (
+    user_id         BIGINT PRIMARY KEY,
+    username        TEXT,
+    role            TEXT NOT NULL DEFAULT 'admin',  -- super | admin
+    is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+    is_banned       BOOLEAN NOT NULL DEFAULT FALSE,
+    note            TEXT,
+    created_by      BIGINT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- system_settings (key-value for admin-editable config)
 CREATE TABLE IF NOT EXISTS system_settings (
     key             TEXT PRIMARY KEY,
@@ -402,6 +415,18 @@ async def run_migrations() -> None:
             str(config.FREE_MAX_NEWS_PER_DAY),
             str(config.FREE_MAX_SOURCES),
         )
+        await conn.execute(
+            """
+            INSERT INTO bot_admins (user_id, username, role, is_active, is_banned)
+            VALUES ($1, $2, 'super', TRUE, FALSE)
+            ON CONFLICT (user_id) DO UPDATE SET
+                role = 'super',
+                is_active = TRUE,
+                username = COALESCE(EXCLUDED.username, bot_admins.username)
+            """,
+            int(config.ADMIN_ID),
+            (getattr(config, "ADMIN_USERNAME", None) or "").lstrip("@") or None,
+        )
         # seed default VIP plans if empty
         count = await conn.fetchval("SELECT COUNT(*) FROM plans")
         if not count:
@@ -429,6 +454,21 @@ async def run_migrations() -> None:
         await conn.execute(
             "ALTER TABLE channel_daily_stats ADD COLUMN IF NOT EXISTS members_count INTEGER"
         )
+        
+        # seed primary admin from config (always present)
+        await conn.execute(
+            """
+            INSERT INTO bot_admins (user_id, username, role, is_active, is_banned)
+            VALUES ($1, $2, 'super', TRUE, FALSE)
+            ON CONFLICT (user_id) DO UPDATE SET
+                role = 'super',
+                is_active = TRUE,
+                username = COALESCE(EXCLUDED.username, bot_admins.username)
+            """,
+            int(config.ADMIN_ID),
+            (config.ADMIN_USERNAME or "").lstrip("@") or None,
+        )
+
         logger.info("Migrations applied")
 
 

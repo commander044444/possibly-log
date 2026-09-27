@@ -10,7 +10,7 @@ import database as db
 import keyboards as kb
 from services import payments as pay_svc
 from services import subscription as sub_svc
-from utils.helpers import is_admin, resolve_user_ref, format_user_ref
+from utils.helpers import is_admin, is_super_admin, resolve_user_ref, format_user_ref
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +101,7 @@ async def _user_detail_text(target_id: int) -> str:
 async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
     data = (callback.data or "").strip()
     user = callback.from_user
-    if not user or not is_admin(int(user.user_id)):
+    if not user or not await is_admin(int(user.user_id)):
         return
     msg = callback.message
     uid = int(user.user_id)
@@ -304,14 +304,59 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
         if not plans:
             await msg.reply("پلنی نیست.", components=kb.admin_panel_kb())
             return
-        lines = ["💳 پلن‌ها\n"]
-        for p in plans:
-            st = "🟢" if p["enabled"] else "🔴"
+        from bale import InlineKeyboardMarkup, InlineKeyboardButton
+        mk = InlineKeyboardMarkup()
+        lines = ["💳 پلن‌ها و قیمت‌ها\n"]
+        for i, pl in enumerate(plans, start=1):
+            st = "🟢" if pl["enabled"] else "🔴"
             lines.append(
-                f"{st} #{p['id']} {p['name']} | {p['price']:,}ت | {p['duration_days']}روز | "
-                f"ch={p['max_channels']} iv={p['min_interval_minutes']}m"
+                f"{st} #{pl['id']} {pl['name']}\n"
+                f"   💰 {pl['price']:,} تومان | ⏱ {pl['duration_days']} روز"
             )
-        await msg.reply("\n".join(lines), components=kb.admin_panel_kb())
+            mk.add(
+                InlineKeyboardButton(
+                    text=f"💰 قیمت #{pl['id']}",
+                    callback_data=f"admin:plan:price:{pl['id']}",
+                ),
+                row=i,
+            )
+            mk.add(
+                InlineKeyboardButton(
+                    text=("🔴 خاموش" if pl["enabled"] else "🟢 روشن") + f" #{pl['id']}",
+                    callback_data=f"admin:plan:toggle:{pl['id']}",
+                ),
+                row=i,
+            )
+        mk.add(InlineKeyboardButton(text="🔙 پنل", callback_data="admin:panel"), row=len(plans) + 1)
+        await msg.reply("\n".join(lines), components=mk)
+        return
+
+    if data.startswith("admin:plan:price:"):
+        plan_id = int(data.split(":")[-1])
+        plan = await db.fetchrow("SELECT * FROM plans WHERE id = $1", plan_id)
+        if not plan:
+            await msg.reply("پلن یافت نشد.")
+            return
+        from handlers.user import set_state
+        await set_state(uid, "admin_set_plan_price", {"plan_id": plan_id})
+        await msg.reply(
+            f"قیمت جدید «{plan['name']}» را به تومان بفرستید\n"
+            f"(فعلی: {plan['price']:,})\n/cancel برای لغو"
+        )
+        return
+
+    if data.startswith("admin:plan:toggle:"):
+        plan_id = int(data.split(":")[-1])
+        await db.execute(
+            "UPDATE plans SET enabled = NOT enabled WHERE id = $1",
+            plan_id,
+        )
+        row = await db.fetchrow("SELECT name, enabled, price FROM plans WHERE id = $1", plan_id)
+        st = "فعال" if row and row["enabled"] else "غیرفعال"
+        await msg.reply(
+            f"پلن «{row['name']}» الان {st} است.\nقیمت: {row['price']:,}",
+            components=kb.admin_panel_kb(),
+        )
         return
 
     if data == "admin:payments":
@@ -514,16 +559,150 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
         )
         return
 
+    if data == "admin:card":
+        card, holder = await pay_svc.get_card_settings()
+        from bale import InlineKeyboardMarkup, InlineKeyboardButton
+        mk = InlineKeyboardMarkup()
+        mk.add(InlineKeyboardButton(text="✏️ تغییر شماره کارت", callback_data="admin:card:num"), row=1)
+        mk.add(InlineKeyboardButton(text="✏️ تغییر نام صاحب کارت", callback_data="admin:card:holder"), row=2)
+        mk.add(InlineKeyboardButton(text="🔙 پنل", callback_data="admin:panel"), row=3)
+        await msg.reply(
+            f"💳 تنظیمات کارت\n\nشماره:\n`{card}`\n\nبه نام:\n{holder}",
+            components=mk,
+        )
+        return
+
+    if data == "admin:card:num":
+        from handlers.user import set_state
+        await set_state(uid, "admin_set_card_num", {})
+        await msg.reply("شماره کارت جدید را بفرستید (فقط عدد):\n/cancel برای لغو")
+        return
+
+    if data == "admin:card:holder":
+        from handlers.user import set_state
+        await set_state(uid, "admin_set_card_holder", {})
+        await msg.reply("نام صاحب حساب را بفرستید:\n/cancel برای لغو")
+        return
+
+    if data == "admin:admins":
+        rows = await db.fetch(
+            "SELECT * FROM bot_admins ORDER BY role DESC, created_at ASC"
+        )
+        from bale import InlineKeyboardMarkup, InlineKeyboardButton
+        mk = InlineKeyboardMarkup()
+        lines = ["🛡 ادمین‌های ربات\n"]
+        lines.append(f"⭐ Owner (config): {config.ADMIN_ID} @{config.ADMIN_USERNAME}\n")
+        for i, r in enumerate(rows, start=1):
+            uref = format_user_ref(r.get("username"), r["user_id"])
+            role = r.get("role") or "admin"
+            flags = []
+            if not r.get("is_active", True):
+                flags.append("غیرفعال")
+            if r.get("is_banned"):
+                flags.append("بن")
+            flag_s = f" ({', '.join(flags)})" if flags else ""
+            lines.append(f"• {uref} | {role}{flag_s}")
+            mk.add(
+                InlineKeyboardButton(
+                    text=f"مدیریت {uref}"[:40],
+                    callback_data=f"admin:adm:{r['user_id']}",
+                ),
+                row=i,
+            )
+        mk.add(InlineKeyboardButton(text="➕ افزودن ادمین", callback_data="admin:adm:add"), row=len(rows) + 1)
+        mk.add(InlineKeyboardButton(text="🔙 پنل", callback_data="admin:panel"), row=len(rows) + 2)
+        await msg.reply("\n".join(lines), components=mk)
+        return
+
+    if data == "admin:adm:add":
+        if not is_super_admin(uid):
+            await msg.reply("فقط Owner می‌تواند ادمین جدید اضافه کند.")
+            return
+        from handlers.user import set_state
+        await set_state(uid, "admin_add_admin", {})
+        await msg.reply(
+            "آیدی عددی کاربر یا @username او را بفرستید:\n/cancel برای لغو"
+        )
+        return
+
+    if data.startswith("admin:adm:") and data not in ("admin:adm:add",):
+        parts = data.split(":")
+        if len(parts) == 3:
+            target = int(parts[2])
+            row = await db.fetchrow("SELECT * FROM bot_admins WHERE user_id = $1", target)
+            uref = await resolve_user_ref(target)
+            from bale import InlineKeyboardMarkup, InlineKeyboardButton
+            mk = InlineKeyboardMarkup()
+            if row:
+                if row.get("is_banned"):
+                    mk.add(InlineKeyboardButton(text="🟢 آنبن ادمین", callback_data=f"admin:adm:unban:{target}"), row=1)
+                else:
+                    mk.add(InlineKeyboardButton(text="🚫 بن ادمین", callback_data=f"admin:adm:ban:{target}"), row=1)
+                if row.get("is_active"):
+                    mk.add(InlineKeyboardButton(text="⏹ غیرفعال کردن", callback_data=f"admin:adm:off:{target}"), row=2)
+                else:
+                    mk.add(InlineKeyboardButton(text="✅ فعال کردن", callback_data=f"admin:adm:on:{target}"), row=2)
+                if not is_super_admin(target):
+                    mk.add(InlineKeyboardButton(text="🗑 حذف ادمین", callback_data=f"admin:adm:del:{target}"), row=3)
+            mk.add(InlineKeyboardButton(text="🔙 لیست ادمین", callback_data="admin:admins"), row=4)
+            info = f"🛡 {uref}\n"
+            if row:
+                info += f"نقش: {row.get('role')}\nفعال: {row.get('is_active')}\nبن: {row.get('is_banned')}"
+            else:
+                info += "در جدول ادمین نیست."
+            await msg.reply(info, components=mk)
+            return
+
+        action, target_s = parts[2], parts[3]
+        target = int(target_s)
+        if is_super_admin(target) and action in ("del", "ban", "off"):
+            await msg.reply("Owner اصلی قابل حذف/بن/غیرفعال نیست.")
+            return
+        if action == "ban":
+            await db.execute(
+                "UPDATE bot_admins SET is_banned = TRUE, updated_at = NOW() WHERE user_id = $1",
+                target,
+            )
+            await msg.reply("ادمین بن شد.", components=kb.admin_panel_kb())
+        elif action == "unban":
+            await db.execute(
+                "UPDATE bot_admins SET is_banned = FALSE, updated_at = NOW() WHERE user_id = $1",
+                target,
+            )
+            await msg.reply("آنبن شد.", components=kb.admin_panel_kb())
+        elif action == "off":
+            await db.execute(
+                "UPDATE bot_admins SET is_active = FALSE, updated_at = NOW() WHERE user_id = $1",
+                target,
+            )
+            await msg.reply("ادمین غیرفعال شد.", components=kb.admin_panel_kb())
+        elif action == "on":
+            await db.execute(
+                "UPDATE bot_admins SET is_active = TRUE, updated_at = NOW() WHERE user_id = $1",
+                target,
+            )
+            await msg.reply("ادمین فعال شد.", components=kb.admin_panel_kb())
+        elif action == "del":
+            if not is_super_admin(uid):
+                await msg.reply("فقط Owner می‌تواند ادمین را حذف کند.")
+                return
+            await db.execute("DELETE FROM bot_admins WHERE user_id = $1 AND role != 'super'", target)
+            await msg.reply("ادمین حذف شد.", components=kb.admin_panel_kb())
+        else:
+            await msg.reply("دستور نامعتبر.")
+        return
+
     if data == "admin:settings":
         card, holder = await pay_svc.get_card_settings()
         await msg.reply(
             "⚙️ تنظیمات\n\n"
             f"کارت: {card}\n"
             f"صاحب حساب: {holder}\n"
-            f"Admin: {config.ADMIN_USERNAME}\n"
+            f"Owner: @{config.ADMIN_USERNAME} ({config.ADMIN_ID})\n"
             f"FREE max channels: {config.FREE_MAX_CHANNELS}\n"
             f"FREE min interval: {config.FREE_MIN_NEWS_INTERVAL_MINUTES}m\n"
-            f"FREE max news/day: {config.FREE_MAX_NEWS_PER_DAY}",
+            f"FREE max news/day: {config.FREE_MAX_NEWS_PER_DAY}\n\n"
+            "برای تغییر کارت یا قیمت پلن‌ها از دکمه‌های پنل استفاده کنید.",
             components=kb.admin_panel_kb(),
         )
         return

@@ -209,3 +209,22 @@ async def get_card_settings() -> Tuple[str, str]:
     num = await db.fetchval("SELECT value FROM system_settings WHERE key = 'card_number'")
     holder = await db.fetchval("SELECT value FROM system_settings WHERE key = 'card_holder'")
     return num or config.CARD_NUMBER, holder or config.CARD_HOLDER
+
+
+async def set_card_settings(card_number: str, card_holder: str | None = None) -> None:
+    card_number = (card_number or "").strip()
+    await db.execute(
+        """
+        INSERT INTO system_settings (key, value, updated_at) VALUES ('card_number', $1, NOW())
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+        """,
+        card_number,
+    )
+    if card_holder is not None:
+        await db.execute(
+            """
+            INSERT INTO system_settings (key, value, updated_at) VALUES ('card_holder', $1, NOW())
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+            """,
+            card_holder.strip(),
+        )

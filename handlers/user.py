@@ -134,7 +134,7 @@ async def handle_callback(callback: CallbackQuery, bot) -> None:
         getattr(user, "first_name", None),
         getattr(user, "last_name", None),
     )
-    if await sub_svc.is_banned(uid) and not is_admin(uid):
+    if await sub_svc.is_banned(uid) and not await is_admin(uid):
         await msg.reply("🚫 حساب شما مسدود شده است.")
         return
 
@@ -681,7 +681,7 @@ async def handle_callback(callback: CallbackQuery, bot) -> None:
         await msg.reply(texts.get(section, "بخش یافت نشد."), components=kb.faq_menu_kb())
         return
 
-    if data.startswith("admin:") and is_admin(uid):
+    if data.startswith("admin:") and await is_admin(uid):
         from handlers.admin import handle_admin_callback
         await handle_admin_callback(callback, bot)
         return
@@ -696,7 +696,7 @@ async def handle_text_message(message: Message, bot) -> None:
 
     # admin compose message / broadcast
     state, data = await get_state(uid)
-    if state == "admin_msg_user" and is_admin(uid):
+    if state == "admin_msg_user" and await is_admin(uid):
         target = (data or {}).get("target_id")
         if text in ("/cancel", "لغو"):
             await clear_state(uid)
@@ -710,7 +710,7 @@ async def handle_text_message(message: Message, bot) -> None:
                 await message.reply(f"ارسال ناموفق: {e}")
             await clear_state(uid)
             return
-    if state == "admin_broadcast" and is_admin(uid):
+    if state == "admin_broadcast" and await is_admin(uid):
         if text in ("/cancel", "لغو"):
             await clear_state(uid)
             await message.reply("لغو شد.", components=kb.admin_panel_kb())
@@ -727,11 +727,116 @@ async def handle_text_message(message: Message, bot) -> None:
         await message.reply(f"Broadcast تمام شد. موفق: {ok} | ناموفق: {fail}", components=kb.admin_panel_kb())
         return
 
+    if state == "admin_set_plan_price" and await is_admin(uid):
+        if text in ("/cancel", "لغو"):
+            await clear_state(uid)
+            await message.reply("لغو شد.", components=kb.admin_panel_kb())
+            return
+        digits = "".join(ch for ch in text if ch.isdigit())
+        if not digits:
+            await message.reply("فقط عدد قیمت را بفرستید.")
+            return
+        price = int(digits)
+        plan_id = (data or {}).get("plan_id")
+        if not plan_id:
+            await clear_state(uid)
+            await message.reply("نشست نامعتبر.")
+            return
+        await db.execute("UPDATE plans SET price = $2 WHERE id = $1", int(plan_id), price)
+        row = await db.fetchrow("SELECT name, price FROM plans WHERE id = $1", int(plan_id))
+        await clear_state(uid)
+        await message.reply(
+            f"✅ قیمت «{row['name']}» شد: {row['price']:,} تومان",
+            components=kb.admin_panel_kb(),
+        )
+        return
+
+    if state == "admin_set_card_num" and await is_admin(uid):
+        if text in ("/cancel", "لغو"):
+            await clear_state(uid)
+            await message.reply("لغو شد.", components=kb.admin_panel_kb())
+            return
+        digits = "".join(ch for ch in text if ch.isdigit())
+        if len(digits) < 8:
+            await message.reply("شماره کارت معتبر نیست.")
+            return
+        await pay_svc.set_card_settings(digits, None)
+        await clear_state(uid)
+        await message.reply(f"✅ شماره کارت ذخیره شد:\n`{digits}`", components=kb.admin_panel_kb())
+        return
+
+    if state == "admin_set_card_holder" and await is_admin(uid):
+        if text in ("/cancel", "لغو"):
+            await clear_state(uid)
+            await message.reply("لغو شد.", components=kb.admin_panel_kb())
+            return
+        name = text.strip()[:120]
+        card, _ = await pay_svc.get_card_settings()
+        await pay_svc.set_card_settings(card, name)
+        await clear_state(uid)
+        await message.reply(f"✅ نام صاحب کارت: {name}", components=kb.admin_panel_kb())
+        return
+
+    if state == "admin_add_admin" and await is_admin(uid):
+        from utils.helpers import is_super_admin
+        if not is_super_admin(uid):
+            await clear_state(uid)
+            await message.reply("فقط Owner.")
+            return
+        if text in ("/cancel", "لغو"):
+            await clear_state(uid)
+            await message.reply("لغو شد.", components=kb.admin_panel_kb())
+            return
+        target_id = None
+        uname = None
+        raw = text.strip().lstrip("@")
+        if raw.isdigit():
+            target_id = int(raw)
+        else:
+            # try find user in DB by username
+            row = await db.fetchrow(
+                "SELECT user_id, username FROM users WHERE lower(username) = lower($1)",
+                raw,
+            )
+            if row:
+                target_id = int(row["user_id"])
+                uname = row.get("username")
+            else:
+                await message.reply(
+                    "کاربر در دیتابیس پیدا نشد.\n"
+                    "آیدی عددی را بفرستید یا کاربر یک‌بار /start زده باشد."
+                )
+                return
+        if target_id == int(config.ADMIN_ID):
+            await clear_state(uid)
+            await message.reply("این کاربر همان Owner است.")
+            return
+        await db.execute(
+            """
+            INSERT INTO bot_admins (user_id, username, role, is_active, is_banned, created_by)
+            VALUES ($1, $2, 'admin', TRUE, FALSE, $3)
+            ON CONFLICT (user_id) DO UPDATE SET
+                is_active = TRUE,
+                is_banned = FALSE,
+                username = COALESCE(EXCLUDED.username, bot_admins.username),
+                updated_at = NOW()
+            """,
+            target_id, uname or raw if not raw.isdigit() else uname, uid,
+        )
+        await clear_state(uid)
+        try:
+            await bot.send_message(chat_id=target_id, text="✅ شما به‌عنوان ادمین ربات منصوب شدید.\n/admin")
+        except Exception:
+            pass
+        await message.reply(f"✅ ادمین اضافه شد: {target_id}", components=kb.admin_panel_kb())
+        return
+
+
 
     if text.startswith("/start"):
         await handle_start(message)
         return
-    if text == "/admin" and is_admin(uid):
+    if text == "/admin" and await is_admin(uid):
         await message.reply("پنل مدیریت:", components=kb.admin_panel_kb())
         return
 
