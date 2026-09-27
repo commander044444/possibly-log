@@ -40,10 +40,11 @@ PAYMENT_REVIEW_NOTE = (
 
 # ─── FREE plan limits (defaults; also seeded into system_settings / plans) ─
 FREE_MAX_CHANNELS = 1
-FREE_MIN_NEWS_INTERVAL_MINUTES = 15  # 15 minutes
-FREE_MAX_NEWS_PER_DAY = 150
+FREE_MIN_NEWS_INTERVAL_MINUTES = 30  # random 30–50 applied in scheduler
+FREE_MAX_NEWS_INTERVAL_MINUTES = 50
+FREE_MAX_NEWS_PER_DAY = 130
 FREE_MAX_SOURCES = 2
-FREE_INTERVALS: List[int] = [15, 30, 60, 120]  # minutes
+FREE_INTERVALS: List[int] = [30, 40, 50]  # minutes (UI options; actual gap is random 30–50)
 
 # ─── VIP interval options (minutes) ────────────────────
 VIP_INTERVALS: List[int] = [3, 4, 5, 6, 7, 10, 15, 30, 60]

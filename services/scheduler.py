@@ -5,6 +5,7 @@ Respects FREE/VIP feature limits (interval, daily cap). No per-channel loops.
 from __future__ import annotations
 
 import asyncio
+import random
 import logging
 from typing import Optional
 
@@ -90,10 +91,18 @@ class NewsScheduler:
             return
 
         # enforce min interval from plan limits
-        interval_min = max(
-            int(ch.get("news_interval") or limits["min_interval_minutes"]),
-            int(limits["min_interval_minutes"]),
-        )
+        # FREE: random gap between 30–50 minutes each cycle
+        if limits["tier"] == "FREE":
+            lo = int(getattr(config, "FREE_MIN_NEWS_INTERVAL_MINUTES", 30))
+            hi = int(getattr(config, "FREE_MAX_NEWS_INTERVAL_MINUTES", 50))
+            if hi < lo:
+                hi = lo
+            interval_min = random.randint(lo, hi)
+        else:
+            interval_min = max(
+                int(ch.get("news_interval") or limits["min_interval_minutes"]),
+                int(limits["min_interval_minutes"]),
+            )
         last = self._last_publish.get(channel_id)
         now = utcnow()
         if last and (now - last).total_seconds() < interval_min * 60:
