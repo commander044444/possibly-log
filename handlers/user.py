@@ -909,20 +909,32 @@ def _parse_channel_ref(raw: str):
     Parse user input into either numeric channel_id or username.
     Accepts: @name, name, numeric id, ble.ir/name links.
     """
-    s = _normalize_digits(raw)
+    s = _normalize_digits(raw or "")
     if not s:
         return None, None
 
-    # strip common prefixes / urls
-    s = s.replace("https://", "").replace("http://", "")
-    for prefix in ("ble.ir/", "bale.ai/", "t.me/", "telegram.me/"):
-        if prefix in s.lower():
-            s = s.split(prefix, 1)[-1]
-            break
-    s = s.strip().strip("/")
+    # remove invisible / RTL marks that users often paste with usernames
+    for ch in (
+        "\u200c", "\u200d", "\u200e", "\u200f", "\ufeff",
+        "\u202a", "\u202b", "\u202c", "\u202d", "\u202e",
+        "\xa0",
+    ):
+        s = s.replace(ch, "")
 
-    if s.startswith("@"):
-        s = s[1:]
+    s = s.replace("https://", "").replace("http://", "")
+    lower = s.lower()
+    for prefix in ("ble.ir/", "bale.ai/", "t.me/", "telegram.me/"):
+        if prefix in lower:
+            # split case-insensitively
+            idx = lower.find(prefix)
+            s = s[idx + len(prefix):]
+            break
+
+    # only first token (user may paste "@channel hello")
+    s = s.strip().strip("/")
+    if s:
+        s = s.split()[0]
+    s = s.strip().strip("/").lstrip("@")
 
     # pure numeric (optional leading -)
     if s.lstrip("-").isdigit():
@@ -931,7 +943,11 @@ def _parse_channel_ref(raw: str):
         except ValueError:
             return None, None
 
-    # username: letters, digits, underscore
+    # username: must start with a letter (Bale/Telegram style)
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{2,63}", s):
+        return None, s
+
+    # rare: usernames that still match classic pattern
     if re.fullmatch(r"[A-Za-z0-9_]{3,64}", s):
         return None, s
 
@@ -939,35 +955,54 @@ def _parse_channel_ref(raw: str):
 
 
 async def _get_chat_flexible(bot, chat_ref) -> Optional[object]:
-    """Try get_chat with int/str and use_cache=False."""
+    """
+    Try get_chat with several real Bale API formats.
+    Official docs: chat_id OR username in format @channelusername.
+    """
     candidates = []
     if isinstance(chat_ref, int):
         candidates = [chat_ref, str(chat_ref)]
     else:
-        candidates = [chat_ref, f"@{chat_ref}" if not str(chat_ref).startswith("@") else chat_ref]
+        raw = str(chat_ref).strip()
+        bare = raw.lstrip("@").strip()
+        if not bare:
+            return None
+        # ordered: official @username first, then variants
+        candidates = [
+            f"@{bare}",
+            bare,
+            f"@{bare.lower()}",
+            bare.lower(),
+        ]
+        # de-dupe preserve order
+        seen = set()
+        uniq = []
+        for c in candidates:
+            key = (type(c).__name__, str(c))
+            if key not in seen:
+                seen.add(key)
+                uniq.append(c)
+        candidates = uniq
 
     last_err = None
     for ref in candidates:
-        try:
-            chat = await bot.get_chat(ref, use_cache=False)
-            if chat is not None:
-                return chat
-        except TypeError:
-            # older signature without use_cache
+        for use_cache in (False, True):
             try:
-                chat = await bot.get_chat(ref)
+                try:
+                    chat = await bot.get_chat(ref, use_cache=use_cache)
+                except TypeError:
+                    chat = await bot.get_chat(ref)
                 if chat is not None:
+                    logger.info("get_chat OK ref=%r id=%s title=%s", ref, getattr(chat, "id", None), getattr(chat, "title", None))
                     return chat
             except Exception as e:
                 last_err = e
-                logger.warning("get_chat(%r) failed: %s", ref, e)
-        except Exception as e:
-            last_err = e
-            logger.warning("get_chat(%r) failed: %s", ref, e)
+                logger.warning("get_chat(%r, use_cache=%s) failed: %s", ref, use_cache, e)
+                # Forbidden / NotFound → try next candidate
+                continue
     if last_err:
-        logger.warning("get_chat all candidates failed last=%s", last_err)
+        logger.warning("get_chat all candidates failed for %r last=%s", chat_ref, last_err)
     return None
-
 
 
 async def _fetch_channel_avatar(bot, chat) -> Optional[bytes]:
@@ -1102,9 +1137,21 @@ async def _resolve_channel_from_text(bot, raw: str) -> dict:
     ref = channel_id if channel_id is not None else username
     chat = await _get_chat_flexible(bot, ref)
 
+    # username-only: extra explicit attempts (Bale is picky about @ format)
+    if chat is None and username:
+        for extra in (f"@{username}", username, f"@{username.lower()}", username.lower()):
+            try:
+                try:
+                    chat = await bot.get_chat(extra, use_cache=False)
+                except TypeError:
+                    chat = await bot.get_chat(extra)
+                if chat is not None:
+                    logger.info("username resolve OK via extra=%r", extra)
+                    break
+            except Exception as e:
+                logger.warning("username extra get_chat(%r): %s", extra, e)
+
     if chat is None:
-        # اگر فقط آیدی عددی داده شده، ثبت با همان آیدی (fallback)
-        # چون بعضی کانال‌های Bale با get_chat مشکل دارند ولی send کار می‌کند
         if channel_id is not None:
             admin = await _check_bot_admin(bot, channel_id)
             return {
@@ -1118,10 +1165,10 @@ async def _resolve_channel_from_text(bot, raw: str) -> dict:
             "ok": False,
             "error": (
                 "❌ کانال با این @username پیدا نشد.\n\n"
-                "• نام کاربری را دقیق بفرستید\n"
+                "• نام کاربری را دقیق و بدون فاصله بفرستید (مثال: @mychannel)\n"
+                "• ربات را اول Admin کانال کنید، بعد دوباره @username را بفرستید\n"
                 "• یا آیدی عددی را بفرستید\n"
-                "• یا یک پست از کانال را برای ربات Forward کنید\n"
-                "• ربات باید عضو/ادمین کانال باشد"
+                "• یا یک پست از کانال را برای ربات Forward کنید"
             ),
         }
 
