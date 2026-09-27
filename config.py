@@ -9,13 +9,13 @@ import os
 from typing import Dict, Any, List
 
 # ─── Bot ───────────────────────────────────────────────
-BOT_TOKEN = "PUT_BOT_TOKEN_HERE"
+BOT_TOKEN = "858228563:_gVyZQIjoAy8ZMw0bsG4JRFDWFC9prRnVNc"
 ADMIN_ID = 1967315238
 ADMIN_USERNAME = "commander04"  # display as @commander04
 
 # ─── PostgreSQL (PRIMARY) ──────────────────────────────
 # Paste your Railway PostgreSQL URL here:
-POSTGRESQL_URL = "PUT_RAILWAY_POSTGRESQL_URL_HERE"
+POSTGRESQL_URL = "postgresql://postgres:rTzsPViElMQWJWSnYlHLWNWYcQNiwtzl@postgres.railway.internal:5432/railway"
 
 # Fallback only if POSTGRESQL_URL is still the placeholder
 _env_db = os.environ.get("DATABASE_URL", "")
