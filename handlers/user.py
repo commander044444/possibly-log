@@ -787,16 +787,31 @@ async def handle_text_message(message: Message, bot) -> None:
             resolved = await _resolve_channel_from_text(bot, text)
 
         if not resolved.get("ok"):
-            # state را نگه می‌داریم تا کاربر دوباره تلاش کند
+            if resolved.get("need_forward") and resolved.get("pending_username"):
+                # Bale did not resolve @username → ask for one forward; keep username
+                await set_state(
+                    uid,
+                    "await_channel",
+                    {"pending_username": resolved["pending_username"]},
+                )
+                await message.reply(
+                    resolved.get("error")
+                    or (
+                        "⚠️ یوزرنیم ذخیره شد.\n"
+                        "یک پست از همان کانال را Forward کنید."
+                    ),
+                    components=kb.cancel_kb(),
+                )
+                return
             await message.reply(
                 resolved.get("error")
                 or (
                     "❌ کانال پیدا نشد.\n\n"
                     "لطفاً یکی از موارد زیر را بفرستید:\n"
-                    "• آیدی عددی کانال (مثلاً 1234567890)\n"
+                    "• آیدی عددی کانال\n"
                     "• @username کانال\n"
                     "• یک پیام فوروارد شده از همان کانال\n\n"
-                    "و مطمئن شوید ربات را Admin کرده‌اید و اجازه Post دارد."
+                    "و مطمئن شوید ربات را Admin کرده‌اید."
                 ),
                 components=kb.cancel_kb(),
             )
@@ -805,7 +820,7 @@ async def handle_text_message(message: Message, bot) -> None:
         await clear_state(uid)
         channel_id = resolved["channel_id"]
         title = resolved.get("title") or str(channel_id)
-        username = resolved.get("username")
+        username = resolved.get("username") or (data or {}).get("pending_username")
 
         limits = await sub_svc.get_user_limits(uid)
         default_iv = limits["min_interval_minutes"]
@@ -967,14 +982,12 @@ async def _get_chat_flexible(bot, chat_ref) -> Optional[object]:
         bare = raw.lstrip("@").strip()
         if not bare:
             return None
-        # ordered: official @username first, then variants
         candidates = [
             f"@{bare}",
             bare,
             f"@{bare.lower()}",
             bare.lower(),
         ]
-        # de-dupe preserve order
         seen = set()
         uniq = []
         for c in candidates:
@@ -993,15 +1006,66 @@ async def _get_chat_flexible(bot, chat_ref) -> Optional[object]:
                 except TypeError:
                     chat = await bot.get_chat(ref)
                 if chat is not None:
-                    logger.info("get_chat OK ref=%r id=%s title=%s", ref, getattr(chat, "id", None), getattr(chat, "title", None))
+                    logger.info(
+                        "get_chat OK ref=%r id=%s title=%s",
+                        ref, getattr(chat, "id", None), getattr(chat, "title", None),
+                    )
                     return chat
             except Exception as e:
                 last_err = e
                 logger.warning("get_chat(%r, use_cache=%s) failed: %s", ref, use_cache, e)
-                # Forbidden / NotFound → try next candidate
                 continue
     if last_err:
         logger.warning("get_chat all candidates failed for %r last=%s", chat_ref, last_err)
+    return None
+
+
+async def _resolve_username_via_side_apis(bot, username: str) -> Optional[object]:
+    """
+    Some Bale builds fail get_chat(@user) but succeed on other methods
+    that still accept @username. Try those, then re-fetch chat by numeric id.
+    """
+    bare = username.lstrip("@").strip()
+    refs = [f"@{bare}", bare, f"@{bare.lower()}", bare.lower()]
+    # 1) get_chat_members_count — if it works, channel is reachable
+    for ref in refs:
+        try:
+            count = await bot.get_chat_members_count(ref)
+            logger.info("get_chat_members_count(%r)=%s", ref, count)
+        except Exception as e:
+            logger.warning("get_chat_members_count(%r): %s", ref, e)
+        else:
+            # members_count alone does not give chat id; still try get_chat again
+            chat = await _get_chat_flexible(bot, ref)
+            if chat is not None:
+                return chat
+    # 2) get_chat_administrators
+    for ref in refs:
+        try:
+            admins = await bot.get_chat_administrators(ref)
+            logger.info("get_chat_administrators(%r) returned %s", ref, type(admins))
+        except Exception as e:
+            logger.warning("get_chat_administrators(%r): %s", ref, e)
+            continue
+        chat = await _get_chat_flexible(bot, ref)
+        if chat is not None:
+            return chat
+        # try extract chat id from admin objects if present
+        if admins:
+            for a in (admins if isinstance(admins, (list, tuple)) else [admins]):
+                for attr in ("chat", "chat_id"):
+                    val = getattr(a, attr, None)
+                    if val is None and isinstance(a, dict):
+                        val = a.get(attr)
+                    if val is not None and not isinstance(val, (str, int)):
+                        # chat object
+                        cid = getattr(val, "id", None)
+                        if cid is not None:
+                            return await _get_chat_flexible(bot, int(cid)) or val
+                    elif isinstance(val, (str, int)):
+                        chat = await _get_chat_flexible(bot, val)
+                        if chat is not None:
+                            return chat
     return None
 
 
@@ -1137,7 +1201,6 @@ async def _resolve_channel_from_text(bot, raw: str) -> dict:
     ref = channel_id if channel_id is not None else username
     chat = await _get_chat_flexible(bot, ref)
 
-    # username-only: extra explicit attempts (Bale is picky about @ format)
     if chat is None and username:
         for extra in (f"@{username}", username, f"@{username.lower()}", username.lower()):
             try:
@@ -1151,6 +1214,9 @@ async def _resolve_channel_from_text(bot, raw: str) -> dict:
             except Exception as e:
                 logger.warning("username extra get_chat(%r): %s", extra, e)
 
+    if chat is None and username:
+        chat = await _resolve_username_via_side_apis(bot, username)
+
     if chat is None:
         if channel_id is not None:
             admin = await _check_bot_admin(bot, channel_id)
@@ -1161,14 +1227,18 @@ async def _resolve_channel_from_text(bot, raw: str) -> dict:
                 "username": None,
                 "bot_is_admin": admin,
             }
+        # Username could not be resolved by Bale API.
+        # Return a special code so caller can start "pending username + forward" flow.
         return {
             "ok": False,
+            "need_forward": True,
+            "pending_username": username,
             "error": (
-                "❌ کانال با این @username پیدا نشد.\n\n"
-                "• نام کاربری را دقیق و بدون فاصله بفرستید (مثال: @mychannel)\n"
-                "• ربات را اول Admin کانال کنید، بعد دوباره @username را بفرستید\n"
-                "• یا آیدی عددی را بفرستید\n"
-                "• یا یک پست از کانال را برای ربات Forward کنید"
+                "⚠️ بله آیدی عددی این @username را برنگرداند.\n\n"
+                f"یوزرنیم ذخیره‌شده: @{username}\n\n"
+                "یک پست از همان کانال را برای ربات Forward کنید\n"
+                "تا آیدی عددی گرفته شود و کانال ثبت شود.\n\n"
+                "(آیدی عددی و فوروارد مثل قبل کار می‌کنند)"
             ),
         }
 

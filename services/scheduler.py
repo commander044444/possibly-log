@@ -130,7 +130,17 @@ class NewsScheduler:
 
         text = news_svc.format_news_message(news)
         try:
-            await self.bot.send_message(chat_id=channel_id, text=text)
+            try:
+                await self.bot.send_message(chat_id=channel_id, text=text)
+            except Exception as send_err:
+                uname = ch.get("channel_username")
+                if uname:
+                    try:
+                        await self.bot.send_message(chat_id=f"@{uname.lstrip('@')}", text=text)
+                    except Exception:
+                        raise send_err
+                else:
+                    raise send_err
             await news_svc.bump_channel_stats(channel_id, "text")
             await sub_svc.increment_daily_publish(owner_id)
             self._last_publish[channel_id] = now
