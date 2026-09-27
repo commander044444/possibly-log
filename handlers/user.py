@@ -696,6 +696,34 @@ async def handle_text_message(message: Message, bot) -> None:
 
     # admin compose message / broadcast
     state, data = await get_state(uid)
+
+    # user cancelled payment receipt upload
+    if state == "await_receipt" and text in ("/cancel", "لغو", "انصراف"):
+        payment_id = (data or {}).get("payment_id")
+        await clear_state(uid)
+        try:
+            if payment_id:
+                await pay_svc.transition_payment(int(payment_id), "cancelled")
+        except Exception:
+            pass
+        try:
+            from utils.helpers import list_admin_ids_with_perm, resolve_user_ref
+            uref = await resolve_user_ref(uid)
+            note = (
+                f"⚠️ کاربر بدون ارسال اسکرین‌شات انصراف داد\n\n"
+                f"پرداخت #{payment_id}\n"
+                f"کاربر: {uref}"
+            )
+            for aid in await list_admin_ids_with_perm("can_payments"):
+                try:
+                    await bot.send_message(chat_id=aid, text=note)
+                except Exception:
+                    pass
+        except Exception:
+            logger.exception("notify cancel receipt")
+        await message.reply("درخواست پرداخت لغو شد.", components=kb.back_main())
+        return
+
     if state == "admin_msg_user" and await is_admin(uid):
         target = (data or {}).get("target_id")
         if text in ("/cancel", "لغو"):
@@ -837,7 +865,12 @@ async def handle_text_message(message: Message, bot) -> None:
         await handle_start(message)
         return
     if text == "/admin" and await is_admin(uid):
-        await message.reply("پنل مدیریت:", components=kb.admin_panel_kb())
+        from utils.helpers import is_super_admin, get_admin_record
+        if is_super_admin(uid):
+            panel = kb.admin_panel_kb({"_super": True})
+        else:
+            panel = kb.admin_panel_kb(await get_admin_record(uid) or {})
+        await message.reply("پنل مدیریت:", components=panel)
         return
 
     if not text:
@@ -1006,11 +1039,17 @@ async def _maybe_receipt_photo(message: Message, bot) -> None:
         uname = getattr(user, "username", None)
         if uname:
             uref = format_user_ref(uname, uid)
-        await bot.send_message(
-            chat_id=config.ADMIN_ID,
-            text=f"📸 رسید پرداخت #{payment_id} از {uref}",
-            components=kb.admin_receipt_kb(payment_id),
-        )
+        from utils.helpers import list_admin_ids_with_perm
+        note = f"📸 رسید پرداخت #{payment_id} از {uref}"
+        for aid in await list_admin_ids_with_perm("can_payments"):
+            try:
+                await bot.send_message(
+                    chat_id=aid,
+                    text=note,
+                    components=kb.admin_receipt_kb(payment_id),
+                )
+            except Exception:
+                pass
     except Exception:
         logger.exception("notify receipt")
 

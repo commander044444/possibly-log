@@ -158,3 +158,92 @@ async def resolve_user_ref(user_id: int) -> str:
     except Exception:
         pass
     return format_user_ref(None, user_id)
+
+
+# Permission keys used across admin panel
+ADMIN_PERMS = (
+    "can_users",
+    "can_payments",
+    "can_broadcast",
+    "can_plans",
+    "can_card",
+    "can_sources",
+    "can_tickets",
+    "can_settings",
+    "can_manage_admins",
+    "can_stats",
+    "can_channels",
+    "can_licenses",
+)
+
+PERM_LABELS = {
+    "can_users": "کاربران",
+    "can_payments": "پرداخت‌ها / رسید",
+    "can_broadcast": "همگانی (Broadcast)",
+    "can_plans": "پلن و قیمت",
+    "can_card": "شماره کارت",
+    "can_sources": "منابع خبری",
+    "can_tickets": "تیکت‌ها",
+    "can_settings": "تنظیمات",
+    "can_manage_admins": "مدیریت ادمین‌ها",
+    "can_stats": "آمار سیستم",
+    "can_channels": "کانال‌ها",
+    "can_licenses": "لایسنس‌ها",
+}
+
+
+async def get_admin_record(user_id: int) -> dict | None:
+    uid = int(user_id)
+    if uid == int(config.ADMIN_ID):
+        # virtual super record
+        rec = {k: True for k in ADMIN_PERMS}
+        rec.update({
+            "user_id": uid,
+            "username": getattr(config, "ADMIN_USERNAME", None),
+            "role": "super",
+            "is_active": True,
+            "is_banned": False,
+        })
+        return rec
+    try:
+        import database as db
+        row = await db.fetchrow("SELECT * FROM bot_admins WHERE user_id = $1", uid)
+        return dict(row) if row else None
+    except Exception:
+        return None
+
+
+async def has_admin_perm(user_id: int, perm: str) -> bool:
+    """Super owner always True. Others need active + perm flag."""
+    uid = int(user_id)
+    if uid == int(config.ADMIN_ID):
+        return True
+    rec = await get_admin_record(uid)
+    if not rec:
+        return False
+    if not rec.get("is_active", True) or rec.get("is_banned"):
+        return False
+    if rec.get("role") == "super":
+        return True
+    return bool(rec.get(perm, False))
+
+
+async def list_admin_ids_with_perm(perm: str) -> list[int]:
+    """Notify targets: owner + admins that have perm."""
+    ids = [int(config.ADMIN_ID)]
+    try:
+        import database as db
+        rows = await db.fetch(
+            f"""
+            SELECT user_id FROM bot_admins
+            WHERE is_active = TRUE AND COALESCE(is_banned, FALSE) = FALSE
+              AND (role = 'super' OR {perm} = TRUE)
+            """
+        )
+        for r in rows:
+            uid = int(r["user_id"])
+            if uid not in ids:
+                ids.append(uid)
+    except Exception:
+        pass
+    return ids

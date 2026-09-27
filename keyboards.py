@@ -209,22 +209,31 @@ def faq_menu_kb() -> InlineKeyboardMarkup:
     return _markup_from_rows(rows)
 
 
-def admin_panel_kb() -> InlineKeyboardMarkup:
-    rows = [
-        [InlineKeyboardButton(text="👥 کاربران", callback_data="admin:users")],
-        [InlineKeyboardButton(text="🛡 ادمین‌ها", callback_data="admin:admins")],
-        [InlineKeyboardButton(text="📺 کانال‌ها", callback_data="admin:channels")],
-        [InlineKeyboardButton(text="💳 پلن‌ها و قیمت‌ها", callback_data="admin:plans")],
-        [InlineKeyboardButton(text="💳 شماره کارت", callback_data="admin:card")],
-        [InlineKeyboardButton(text="💰 پرداخت‌ها", callback_data="admin:payments")],
-        [InlineKeyboardButton(text="🔑 لایسنس‌ها", callback_data="admin:licenses")],
-        [InlineKeyboardButton(text="📢 Broadcast", callback_data="admin:broadcast")],
-        [InlineKeyboardButton(text="📊 آمار سیستم", callback_data="admin:stats")],
-        [InlineKeyboardButton(text="📰 منابع خبری", callback_data="admin:sources")],
-        [InlineKeyboardButton(text="🎫 تیکت‌ها", callback_data="admin:tickets")],
-        [InlineKeyboardButton(text="❤️ Health", callback_data="admin:health")],
-        [InlineKeyboardButton(text="⚙️ تنظیمات", callback_data="admin:settings")],
+def admin_panel_kb(perms: dict | None = None) -> InlineKeyboardMarkup:
+    """
+    perms: map of permission key -> bool. None = show all (super).
+    """
+    items = [
+        ("👥 کاربران", "admin:users", "can_users"),
+        ("🛡 ادمین‌ها", "admin:admins", "can_manage_admins"),
+        ("📺 کانال‌ها", "admin:channels", "can_channels"),
+        ("💳 پلن‌ها و قیمت‌ها", "admin:plans", "can_plans"),
+        ("💳 شماره کارت", "admin:card", "can_card"),
+        ("💰 پرداخت‌ها / رسیدها", "admin:payments", "can_payments"),
+        ("🔑 لایسنس‌ها", "admin:licenses", "can_licenses"),
+        ("📢 همگانی", "admin:broadcast", "can_broadcast"),
+        ("📊 آمار سیستم", "admin:stats", "can_stats"),
+        ("📰 منابع خبری", "admin:sources", "can_sources"),
+        ("🎫 تیکت‌ها", "admin:tickets", "can_tickets"),
+        ("❤️ Health", "admin:health", "can_stats"),
+        ("⚙️ تنظیمات", "admin:settings", "can_settings"),
     ]
+    rows = []
+    for text, cb, perm in items:
+        if perms is None or perms.get(perm, False) or perms.get("_super"):
+            rows.append([InlineKeyboardButton(text=text, callback_data=cb)])
+    if not rows:
+        rows.append([InlineKeyboardButton(text="⛔ بدون دسترسی", callback_data="admin:panel")])
     return _markup_from_rows(rows)
 
 

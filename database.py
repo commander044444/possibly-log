@@ -356,6 +356,18 @@ CREATE TABLE IF NOT EXISTS bot_admins (
     is_active       BOOLEAN NOT NULL DEFAULT TRUE,
     is_banned       BOOLEAN NOT NULL DEFAULT FALSE,
     note            TEXT,
+    can_users       BOOLEAN NOT NULL DEFAULT TRUE,
+    can_payments    BOOLEAN NOT NULL DEFAULT TRUE,
+    can_broadcast   BOOLEAN NOT NULL DEFAULT FALSE,
+    can_plans       BOOLEAN NOT NULL DEFAULT FALSE,
+    can_card        BOOLEAN NOT NULL DEFAULT FALSE,
+    can_sources     BOOLEAN NOT NULL DEFAULT FALSE,
+    can_tickets     BOOLEAN NOT NULL DEFAULT TRUE,
+    can_settings    BOOLEAN NOT NULL DEFAULT FALSE,
+    can_manage_admins BOOLEAN NOT NULL DEFAULT FALSE,
+    can_stats       BOOLEAN NOT NULL DEFAULT TRUE,
+    can_channels    BOOLEAN NOT NULL DEFAULT TRUE,
+    can_licenses    BOOLEAN NOT NULL DEFAULT TRUE,
     created_by      BIGINT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -395,6 +407,19 @@ async def run_migrations() -> None:
             ALTER TABLE payment_requests ADD COLUMN IF NOT EXISTS currency TEXT DEFAULT 'IRR';
             ALTER TABLE licenses ADD COLUMN IF NOT EXISTS plan_id BIGINT;
             ALTER TABLE channels ALTER COLUMN news_interval SET DEFAULT 180;
+            ALTER TABLE bot_admins ADD COLUMN IF NOT EXISTS can_users BOOLEAN NOT NULL DEFAULT TRUE;
+            ALTER TABLE bot_admins ADD COLUMN IF NOT EXISTS can_payments BOOLEAN NOT NULL DEFAULT TRUE;
+            ALTER TABLE bot_admins ADD COLUMN IF NOT EXISTS can_broadcast BOOLEAN NOT NULL DEFAULT FALSE;
+            ALTER TABLE bot_admins ADD COLUMN IF NOT EXISTS can_plans BOOLEAN NOT NULL DEFAULT FALSE;
+            ALTER TABLE bot_admins ADD COLUMN IF NOT EXISTS can_card BOOLEAN NOT NULL DEFAULT FALSE;
+            ALTER TABLE bot_admins ADD COLUMN IF NOT EXISTS can_sources BOOLEAN NOT NULL DEFAULT FALSE;
+            ALTER TABLE bot_admins ADD COLUMN IF NOT EXISTS can_tickets BOOLEAN NOT NULL DEFAULT TRUE;
+            ALTER TABLE bot_admins ADD COLUMN IF NOT EXISTS can_settings BOOLEAN NOT NULL DEFAULT FALSE;
+            ALTER TABLE bot_admins ADD COLUMN IF NOT EXISTS can_manage_admins BOOLEAN NOT NULL DEFAULT FALSE;
+            ALTER TABLE bot_admins ADD COLUMN IF NOT EXISTS can_stats BOOLEAN NOT NULL DEFAULT TRUE;
+            ALTER TABLE bot_admins ADD COLUMN IF NOT EXISTS can_channels BOOLEAN NOT NULL DEFAULT TRUE;
+            ALTER TABLE bot_admins ADD COLUMN IF NOT EXISTS can_licenses BOOLEAN NOT NULL DEFAULT TRUE;
+
             """
         )
         await conn.execute(

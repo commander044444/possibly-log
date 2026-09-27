@@ -10,7 +10,11 @@ import database as db
 import keyboards as kb
 from services import payments as pay_svc
 from services import subscription as sub_svc
-from utils.helpers import is_admin, is_super_admin, resolve_user_ref, format_user_ref
+from utils.helpers import (
+    is_admin, is_super_admin, resolve_user_ref, format_user_ref,
+    has_admin_perm, get_admin_record, list_admin_ids_with_perm,
+    ADMIN_PERMS, PERM_LABELS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -106,12 +110,24 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
     msg = callback.message
     uid = int(user.user_id)
 
+    async def _panel():
+        if is_super_admin(uid):
+            return kb.admin_panel_kb({"_super": True})
+        rec = await get_admin_record(uid) or {}
+        return kb.admin_panel_kb(rec)
+
+    async def _deny():
+        await msg.reply("⛔ به این بخش دسترسی ندارید.", components=await _panel())
+
     if data in ("admin:panel", "admin:menu"):
-        await msg.reply("🛠 پنل مدیریت", components=kb.admin_panel_kb())
+        await msg.reply("🛠 پنل مدیریت", components=await _panel())
         return
 
     # ── users list ──────────────────────────────────────
     if data == "admin:users" or data.startswith("admin:users:p:"):
+        if not await has_admin_perm(uid, "can_users"):
+            await _deny()
+            return
         page = 0
         if data.startswith("admin:users:p:"):
             try:
@@ -128,7 +144,7 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
         )
         users = [dict(u) for u in users]
         if not users:
-            await msg.reply("کاربری ثبت نشده.", components=kb.admin_panel_kb())
+            await msg.reply("کاربری ثبت نشده.", components=await _panel())
             return
         total = len(users)
         await msg.reply(
@@ -139,12 +155,18 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
         return
 
     if data.startswith("admin:user:"):
+        if not await has_admin_perm(uid, "can_users"):
+            await _deny()
+            return
         target = int(data.split(":")[-1])
         text = await _user_detail_text(target)
         await msg.reply(text, components=_user_actions_kb(target))
         return
 
     if data.startswith("admin:uban:"):
+        if not await has_admin_perm(uid, "can_users"):
+            await _deny()
+            return
         target = int(data.split(":")[-1])
         await sub_svc.set_banned(target, True)
         # stop their channels
@@ -160,6 +182,9 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
         return
 
     if data.startswith("admin:uunban:"):
+        if not await has_admin_perm(uid, "can_users"):
+            await _deny()
+            return
         target = int(data.split(":")[-1])
         await sub_svc.set_banned(target, False)
         try:
@@ -170,6 +195,9 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
         return
 
     if data.startswith("admin:udeact:"):
+        if not await has_admin_perm(uid, "can_users"):
+            await _deny()
+            return
         target = int(data.split(":")[-1])
         await sub_svc.deactivate_subscription(target)
         await db.execute(
@@ -184,6 +212,9 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
         return
 
     if data.startswith("admin:uact:") or data.startswith("admin:ugift:"):
+        if not await has_admin_perm(uid, "can_users"):
+            await _deny()
+            return
         # show plan picker (same UI)
         target = int(data.split(":")[-1])
         plans = await db.fetch(
@@ -199,6 +230,9 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
         return
 
     if data.startswith("admin:ugiftgo:"):
+        if not await has_admin_perm(uid, "can_users"):
+            await _deny()
+            return
         parts = data.split(":")
         target = int(parts[2])
         plan_id = int(parts[3])
@@ -215,6 +249,9 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
         return
 
     if data.startswith("admin:uch:"):
+        if not await has_admin_perm(uid, "can_users"):
+            await _deny()
+            return
         target = int(data.split(":")[-1])
         rows = await db.fetch(
             """
@@ -238,6 +275,9 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
         return
 
     if data.startswith("admin:umsg:"):
+        if not await has_admin_perm(uid, "can_users"):
+            await _deny()
+            return
         target = int(data.split(":")[-1])
         from handlers.user import set_state
         await set_state(uid, "admin_msg_user", {"target_id": target})
@@ -251,11 +291,14 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
     if data in ("admin:ban", "admin:unban"):
         await msg.reply(
             "از «👥 کاربران» کاربر را انتخاب کنید و بن/آنبن بزنید.",
-            components=kb.admin_panel_kb(),
+            components=await _panel(),
         )
         return
 
     if data == "admin:stats":
+        if not await has_admin_perm(uid, "can_stats"):
+            await _deny()
+            return
         users = await db.fetchval("SELECT COUNT(*) FROM users")
         banned = await db.fetchval("SELECT COUNT(*) FROM users WHERE is_banned")
         paid = await db.fetchval(
@@ -277,11 +320,14 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
             f"کاربران: {users}\nبن‌شده: {banned}\nVIP فعال: {paid}\n"
             f"کانال‌ها: {channels} (فعال: {active_ch})\n"
             f"پرداخت باز: {pending_pay}\nاخبار امروز: {news_today}\nانتشار امروز: {pub_today}",
-            components=kb.admin_panel_kb(),
+            components=await _panel(),
         )
         return
 
     if data == "admin:health":
+        if not await has_admin_perm(uid, "can_stats"):
+            await _deny()
+            return
         try:
             await db.fetchval("SELECT 1")
             db_ok = True
@@ -296,13 +342,16 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
         for s in sources:
             mark = "🟢" if s["health_status"] == "healthy" else "🟡"
             lines.append(f"{mark} Source {s['name']}")
-        await msg.reply("❤️ Health\n\n" + "\n".join(lines), components=kb.admin_panel_kb())
+        await msg.reply("❤️ Health\n\n" + "\n".join(lines), components=await _panel())
         return
 
     if data == "admin:plans":
+        if not await has_admin_perm(uid, "can_plans"):
+            await _deny()
+            return
         plans = await db.fetch("SELECT * FROM plans ORDER BY id")
         if not plans:
-            await msg.reply("پلنی نیست.", components=kb.admin_panel_kb())
+            await msg.reply("پلنی نیست.", components=await _panel())
             return
         from bale import InlineKeyboardMarkup, InlineKeyboardButton
         mk = InlineKeyboardMarkup()
@@ -355,11 +404,14 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
         st = "فعال" if row and row["enabled"] else "غیرفعال"
         await msg.reply(
             f"پلن «{row['name']}» الان {st} است.\nقیمت: {row['price']:,}",
-            components=kb.admin_panel_kb(),
+            components=await _panel(),
         )
         return
 
     if data == "admin:payments":
+        if not await has_admin_perm(uid, "can_payments"):
+            await _deny()
+            return
         rows = await db.fetch(
             """
             SELECT * FROM payment_requests
@@ -368,7 +420,7 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
             """
         )
         if not rows:
-            await msg.reply("پرداخت معلقی نیست.", components=kb.admin_panel_kb())
+            await msg.reply("پرداخت معلقی نیست.", components=await _panel())
             return
         for r in rows:
             uref = await resolve_user_ref(r["user_id"])
@@ -432,6 +484,23 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
         from handlers.user import set_state
         await set_state(pay["user_id"], "await_receipt", {"payment_id": pid})
         await msg.reply(f"کارت برای کاربر ارسال شد #{pid}")
+        # notify payment-admins: waiting for screenshot
+        try:
+            uref = await resolve_user_ref(pay["user_id"])
+            note = (
+                f"⏳ در انتظار اسکرین‌شات واریز\n\n"
+                f"پرداخت #{pid}\n"
+                f"کاربر: {uref}\n"
+                f"مبلغ: {amount:,} تومان\n\n"
+                "اگر کاربر رسید نفرستد از «پرداخت‌ها» پیگیری کنید."
+            )
+            for aid in await list_admin_ids_with_perm("can_payments"):
+                try:
+                    await bot.send_message(chat_id=aid, text=note)
+                except Exception:
+                    pass
+        except Exception:
+            logger.exception("notify awaiting receipt")
         return
 
     if data.startswith("admin:pay:reject:"):
@@ -486,6 +555,9 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
         return
 
     if data == "admin:channels":
+        if not await has_admin_perm(uid, "can_channels"):
+            await _deny()
+            return
         rows = await db.fetch(
             """
             SELECT c.*, u.username AS owner_username
@@ -497,7 +569,7 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
             """
         )
         if not rows:
-            await msg.reply("کانالی نیست.", components=kb.admin_panel_kb())
+            await msg.reply("کانالی نیست.", components=await _panel())
             return
         lines = ["📺 کانال‌ها\n"]
         for r in rows:
@@ -506,15 +578,18 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
             lines.append(
                 f"{st} {r['channel_title'] or r['channel_id']} | owner={owner}"
             )
-        await msg.reply("\n".join(lines)[:3900], components=kb.admin_panel_kb())
+        await msg.reply("\n".join(lines)[:3900], components=await _panel())
         return
 
     if data == "admin:tickets":
+        if not await has_admin_perm(uid, "can_tickets"):
+            await _deny()
+            return
         rows = await db.fetch(
             "SELECT * FROM tickets WHERE status = 'open' ORDER BY id DESC LIMIT 15"
         )
         if not rows:
-            await msg.reply("تیکت بازی نیست.", components=kb.admin_panel_kb())
+            await msg.reply("تیکت بازی نیست.", components=await _panel())
             return
         for t in rows:
             uref = await resolve_user_ref(t["user_id"])
@@ -525,15 +600,21 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
         return
 
     if data == "admin:sources":
+        if not await has_admin_perm(uid, "can_sources"):
+            await _deny()
+            return
         rows = await db.fetch("SELECT * FROM news_sources ORDER BY priority")
         lines = [
             f"{'✅' if r['enabled'] else '⛔'} {r['name']} [{r['health_status']}] p={r['priority']}"
             for r in rows
         ]
-        await msg.reply("منابع:\n" + ("\n".join(lines) or "خالی"), components=kb.admin_panel_kb())
+        await msg.reply("منابع:\n" + ("\n".join(lines) or "خالی"), components=await _panel())
         return
 
     if data == "admin:licenses":
+        if not await has_admin_perm(uid, "can_licenses"):
+            await _deny()
+            return
         rows = await db.fetch(
             """
             SELECT id, user_id, plan_key, status, created_at, used_at
@@ -541,16 +622,19 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
             """
         )
         if not rows:
-            await msg.reply("لایسنسی نیست.", components=kb.admin_panel_kb())
+            await msg.reply("لایسنسی نیست.", components=await _panel())
             return
         lines = ["🔑 آخرین لایسنس‌ها\n"]
         for r in rows:
             uref = await resolve_user_ref(r["user_id"]) if r["user_id"] else "—"
             lines.append(f"#{r['id']} {r['status']} | {uref} | {r['plan_key']}")
-        await msg.reply("\n".join(lines), components=kb.admin_panel_kb())
+        await msg.reply("\n".join(lines), components=await _panel())
         return
 
     if data == "admin:broadcast":
+        if not await has_admin_perm(uid, "can_broadcast"):
+            await _deny()
+            return
         from handlers.user import set_state
         await set_state(uid, "admin_broadcast", {})
         await msg.reply(
@@ -560,6 +644,9 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
         return
 
     if data == "admin:card":
+        if not await has_admin_perm(uid, "can_card"):
+            await _deny()
+            return
         card, holder = await pay_svc.get_card_settings()
         from bale import InlineKeyboardMarkup, InlineKeyboardButton
         mk = InlineKeyboardMarkup()
@@ -585,6 +672,9 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
         return
 
     if data == "admin:admins":
+        if not await has_admin_perm(uid, "can_manage_admins"):
+            await _deny()
+            return
         rows = await db.fetch(
             "SELECT * FROM bot_admins ORDER BY role DESC, created_at ASC"
         )
@@ -615,6 +705,9 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
         return
 
     if data == "admin:adm:add":
+        if not await has_admin_perm(uid, "can_manage_admins"):
+            await _deny()
+            return
         if not is_super_admin(uid):
             await msg.reply("فقط Owner می‌تواند ادمین جدید اضافه کند.")
             return
@@ -626,6 +719,9 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
         return
 
     if data.startswith("admin:adm:") and data not in ("admin:adm:add",):
+        if not await has_admin_perm(uid, "can_manage_admins"):
+            await _deny()
+            return
         parts = data.split(":")
         if len(parts) == 3:
             target = int(parts[2])
@@ -644,7 +740,8 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
                     mk.add(InlineKeyboardButton(text="✅ فعال کردن", callback_data=f"admin:adm:on:{target}"), row=2)
                 if not is_super_admin(target):
                     mk.add(InlineKeyboardButton(text="🗑 حذف ادمین", callback_data=f"admin:adm:del:{target}"), row=3)
-            mk.add(InlineKeyboardButton(text="🔙 لیست ادمین", callback_data="admin:admins"), row=4)
+            mk.add(InlineKeyboardButton(text="🔑 دسترسی‌ها", callback_data=f"admin:adm:perms:{target}"), row=4)
+            mk.add(InlineKeyboardButton(text="🔙 لیست ادمین", callback_data="admin:admins"), row=5)
             info = f"🛡 {uref}\n"
             if row:
                 info += f"نقش: {row.get('role')}\nفعال: {row.get('is_active')}\nبن: {row.get('is_banned')}"
@@ -663,36 +760,39 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
                 "UPDATE bot_admins SET is_banned = TRUE, updated_at = NOW() WHERE user_id = $1",
                 target,
             )
-            await msg.reply("ادمین بن شد.", components=kb.admin_panel_kb())
+            await msg.reply("ادمین بن شد.", components=await _panel())
         elif action == "unban":
             await db.execute(
                 "UPDATE bot_admins SET is_banned = FALSE, updated_at = NOW() WHERE user_id = $1",
                 target,
             )
-            await msg.reply("آنبن شد.", components=kb.admin_panel_kb())
+            await msg.reply("آنبن شد.", components=await _panel())
         elif action == "off":
             await db.execute(
                 "UPDATE bot_admins SET is_active = FALSE, updated_at = NOW() WHERE user_id = $1",
                 target,
             )
-            await msg.reply("ادمین غیرفعال شد.", components=kb.admin_panel_kb())
+            await msg.reply("ادمین غیرفعال شد.", components=await _panel())
         elif action == "on":
             await db.execute(
                 "UPDATE bot_admins SET is_active = TRUE, updated_at = NOW() WHERE user_id = $1",
                 target,
             )
-            await msg.reply("ادمین فعال شد.", components=kb.admin_panel_kb())
+            await msg.reply("ادمین فعال شد.", components=await _panel())
         elif action == "del":
             if not is_super_admin(uid):
                 await msg.reply("فقط Owner می‌تواند ادمین را حذف کند.")
                 return
             await db.execute("DELETE FROM bot_admins WHERE user_id = $1 AND role != 'super'", target)
-            await msg.reply("ادمین حذف شد.", components=kb.admin_panel_kb())
+            await msg.reply("ادمین حذف شد.", components=await _panel())
         else:
             await msg.reply("دستور نامعتبر.")
         return
 
     if data == "admin:settings":
+        if not await has_admin_perm(uid, "can_settings"):
+            await _deny()
+            return
         card, holder = await pay_svc.get_card_settings()
         await msg.reply(
             "⚙️ تنظیمات\n\n"
@@ -703,8 +803,86 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
             f"FREE min interval: {config.FREE_MIN_NEWS_INTERVAL_MINUTES}m\n"
             f"FREE max news/day: {config.FREE_MAX_NEWS_PER_DAY}\n\n"
             "برای تغییر کارت یا قیمت پلن‌ها از دکمه‌های پنل استفاده کنید.",
-            components=kb.admin_panel_kb(),
+            components=await _panel(),
         )
         return
 
-    await msg.reply("دستور ادمین ناشناخته.", components=kb.admin_panel_kb())
+
+    # toggle a single permission for an admin
+    if data.startswith("admin:perm:"):
+        if not await has_admin_perm(uid, "can_manage_admins"):
+            await _deny()
+            return
+        # admin:perm:{target}:{perm_key}
+        parts = data.split(":")
+        if len(parts) < 4:
+            await msg.reply("نامعتبر")
+            return
+        target = int(parts[2])
+        perm_key = parts[3]
+        if perm_key not in ADMIN_PERMS:
+            await msg.reply("کلید نامعتبر")
+            return
+        if is_super_admin(target):
+            await msg.reply("دسترسی Owner همیشه کامل است.")
+            return
+        # toggle
+        row = await db.fetchrow(f"SELECT {perm_key} FROM bot_admins WHERE user_id = $1", target)
+        if not row:
+            await msg.reply("ادمین یافت نشد.")
+            return
+        new_val = not bool(row[perm_key])
+        await db.execute(
+            f"UPDATE bot_admins SET {perm_key} = $2, updated_at = NOW() WHERE user_id = $1",
+            target, new_val,
+        )
+        mark = "✅" if new_val else "❌"
+        await msg.reply(
+            f"{mark} {PERM_LABELS.get(perm_key, perm_key)} برای ادمین {target}: {'فعال' if new_val else 'غیرفعال'}",
+        )
+        # re-show perm keyboard
+        data = f"admin:adm:perms:{target}"
+        # fall through by recursive-style: build keyboard below
+        target_id = target
+        from bale import InlineKeyboardMarkup, InlineKeyboardButton
+        rec = await get_admin_record(target_id) or {}
+        mk = InlineKeyboardMarkup()
+        for i, pk in enumerate(ADMIN_PERMS, start=1):
+            on = bool(rec.get(pk))
+            mk.add(
+                InlineKeyboardButton(
+                    text=f"{'✅' if on else '❌'} {PERM_LABELS.get(pk, pk)}",
+                    callback_data=f"admin:perm:{target_id}:{pk}",
+                ),
+                row=i,
+            )
+        mk.add(InlineKeyboardButton(text="🔙 بازگشت", callback_data=f"admin:adm:{target_id}"), row=len(ADMIN_PERMS) + 1)
+        await msg.reply("دسترسی‌ها (برای تغییر ضربه بزنید):", components=mk)
+        return
+
+    if data.startswith("admin:adm:perms:"):
+        if not await has_admin_perm(uid, "can_manage_admins"):
+            await _deny()
+            return
+        target_id = int(data.split(":")[-1])
+        if is_super_admin(target_id):
+            await msg.reply("Owner همه دسترسی‌ها را دارد.")
+            return
+        from bale import InlineKeyboardMarkup, InlineKeyboardButton
+        rec = await get_admin_record(target_id) or {}
+        mk = InlineKeyboardMarkup()
+        for i, pk in enumerate(ADMIN_PERMS, start=1):
+            on = bool(rec.get(pk))
+            mk.add(
+                InlineKeyboardButton(
+                    text=f"{'✅' if on else '❌'} {PERM_LABELS.get(pk, pk)}",
+                    callback_data=f"admin:perm:{target_id}:{pk}",
+                ),
+                row=i,
+            )
+        mk.add(InlineKeyboardButton(text="🔙 بازگشت", callback_data=f"admin:adm:{target_id}"), row=len(ADMIN_PERMS) + 1)
+        await msg.reply("دسترسی‌ها (برای تغییر ضربه بزنید):", components=mk)
+        return
+
+
+    await msg.reply("دستور ادمین ناشناخته.", components=await _panel())
