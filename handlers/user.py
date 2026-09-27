@@ -13,6 +13,8 @@ from typing import Optional
 from bale import Message, CallbackQuery, InputFile, InlineKeyboardMarkup, InlineKeyboardButton
 
 import config
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import database as db
 import keyboards as kb
 from services import subscription as sub_svc
@@ -158,17 +160,27 @@ async def handle_callback(callback: CallbackQuery, bot) -> None:
             bot, uid, config.VIP_BANNER,
             caption="👑 اشتراک VIP\n\nپلن مورد نظر را انتخاب کنید و کانال خود را حرفه‌ای کنید.",
         )
-        # پیام جداگانه هشدار ساعت کاری پشتیبانی
-        await bot.send_message(
-            chat_id=uid,
-            text=(
-                "⚠️ هشدار — زمان پاسخگویی پشتیبانی\n\n"
-                "تایم کاری پشتیبانی معمولاً بین ساعات "
-                "۱۴ (۲ ظهر) تا ۲۲ (۱۰ شب) می‌باشد "
-                "و در تمام روزهای هفته فعال است.\n\n"
-                "بررسی و تایید پرداخت‌ها نیز در همین بازه زمانی انجام می‌شود."
-            ),
-        )
+        # هشدار فقط خارج از تایم کاری پشتیبانی (تهران)
+        # تایم کاری: ۱۴:۰۰ تا ۲۱:۵۹ — هشدار: قبل از ۱۴ یا از ۲۲ به بعد
+        try:
+            tehran_now = datetime.now(ZoneInfo("Asia/Tehran"))
+            h = tehran_now.hour
+            outside_hours = h < 14 or h >= 22
+        except Exception:
+            outside_hours = False
+        if outside_hours:
+            await bot.send_message(
+                chat_id=uid,
+                text=(
+                    "⚠️ هشدار — زمان پاسخگویی پشتیبانی\n\n"
+                    "الان خارج از تایم کاری پشتیبانی هستید.\n\n"
+                    "تایم کاری پشتیبانی معمولاً بین ساعات "
+                    "۱۴ (۲ ظهر) تا ۲۲ (۱۰ شب) می‌باشد "
+                    "و در تمام روزهای هفته فعال است.\n\n"
+                    "بررسی و تایید پرداخت‌ها نیز در همین بازه زمانی انجام می‌شود."
+                ),
+            )
+
         if not sent:
             await msg.reply(
                 "👑 خرید VIP\n\nروش پرداخت را انتخاب کنید:",
