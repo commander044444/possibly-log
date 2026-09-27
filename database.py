@@ -440,6 +440,20 @@ async def run_migrations() -> None:
             str(config.FREE_MAX_NEWS_PER_DAY),
             str(config.FREE_MAX_SOURCES),
         )
+        # force free limits to current config (admin can still override later via SQL)
+        await conn.execute(
+            """
+            UPDATE system_settings SET value = $1, updated_at = NOW() WHERE key = 'free_max_news_per_day'
+            """,
+            str(config.FREE_MAX_NEWS_PER_DAY),
+        )
+        await conn.execute(
+            """
+            UPDATE system_settings SET value = $1, updated_at = NOW() WHERE key = 'free_min_interval'
+            """,
+            str(config.FREE_MIN_NEWS_INTERVAL_MINUTES),
+        )
+
         await conn.execute(
             """
             INSERT INTO bot_admins (user_id, username, role, is_active, is_banned)
