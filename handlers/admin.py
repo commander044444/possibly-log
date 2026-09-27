@@ -109,6 +109,17 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
         return
     msg = callback.message
     uid = int(user.user_id)
+    if msg is None:
+        logger.warning("admin callback without message: %r", data)
+        return
+
+    # answer callback to clear loading state on client
+    try:
+        ans = getattr(callback, "answer", None) or getattr(callback, "complete", None)
+        if callable(ans):
+            await ans()
+    except Exception:
+        pass
 
     async def _panel():
         if is_super_admin(uid):
@@ -841,7 +852,31 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
         )
         return
 
-    if data.startswith("admin:adm:") and data not in ("admin:adm:add",):
+    if data.startswith("admin:adm:perms:"):
+        if not await has_admin_perm(uid, "can_manage_admins"):
+            await _deny()
+            return
+        target_id = int(data.split(":")[-1])
+        if is_super_admin(target_id):
+            await msg.reply("Owner همه دسترسی‌ها را دارد.")
+            return
+        from bale import InlineKeyboardMarkup, InlineKeyboardButton
+        rec = await get_admin_record(target_id) or {}
+        mk = InlineKeyboardMarkup()
+        for i, pk in enumerate(ADMIN_PERMS, start=1):
+            on = bool(rec.get(pk))
+            mk.add(
+                InlineKeyboardButton(
+                    text=f"{'✅' if on else '❌'} {PERM_LABELS.get(pk, pk)}",
+                    callback_data=f"admin:perm:{target_id}:{pk}",
+                ),
+                row=i,
+            )
+        mk.add(InlineKeyboardButton(text="🔙 بازگشت", callback_data=f"admin:adm:{target_id}"), row=len(ADMIN_PERMS) + 1)
+        await msg.reply("دسترسی‌ها (برای تغییر ضربه بزنید):", components=mk)
+        return
+
+    if data.startswith("admin:adm:") and data not in ("admin:adm:add",) and not data.startswith("admin:adm:perms:"):
         if not await has_admin_perm(uid, "can_manage_admins"):
             await _deny()
             return
@@ -908,8 +943,11 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
                 return
             await db.execute("DELETE FROM bot_admins WHERE user_id = $1 AND role != 'super'", target)
             await msg.reply("ادمین حذف شد.", components=await _panel())
+        elif action == "perms":
+            # should have been handled above; safety
+            pass
         else:
-            await msg.reply("دستور نامعتبر.")
+            await msg.reply(f"دستور ادمین نامعتبر: {data}")
         return
 
     if data == "admin:settings":
@@ -1008,4 +1046,5 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
         return
 
 
-    await msg.reply("دستور ادمین ناشناخته.", components=await _panel())
+    logger.warning("unknown admin callback: %r", data)
+    await msg.reply(f"دستور ادمین ناشناخته.\n`{data}`", components=await _panel())
