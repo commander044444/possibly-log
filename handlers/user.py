@@ -738,6 +738,59 @@ async def handle_text_message(message: Message, bot) -> None:
                 await message.reply(f"ارسال ناموفق: {e}")
             await clear_state(uid)
             return
+
+    if state == "admin_ticket_reply" and await is_admin(uid):
+        if text in ("/cancel", "لغو"):
+            await clear_state(uid)
+            await message.reply("لغو شد.")
+            return
+        ticket_id = (data or {}).get("ticket_id")
+        if not ticket_id:
+            await clear_state(uid)
+            await message.reply("نشست نامعتبر.")
+            return
+        tk = await db.fetchrow("SELECT * FROM tickets WHERE id = $1", int(ticket_id))
+        if not tk:
+            await clear_state(uid)
+            await message.reply("تیکت یافت نشد.")
+            return
+        reply_text = text.strip()[:4000]
+        await db.execute(
+            """
+            INSERT INTO ticket_messages (ticket_id, sender_type, sender_id, message)
+            VALUES ($1, 'admin', $2, $3)
+            """,
+            int(ticket_id), uid, reply_text,
+        )
+        await db.execute(
+            """
+            UPDATE tickets SET status = 'answered', admin_id = $2, updated_at = NOW()
+            WHERE id = $1
+            """,
+            int(ticket_id), uid,
+        )
+        await clear_state(uid)
+        try:
+            await bot.send_message(
+                chat_id=tk["user_id"],
+                text=(
+                    f"💬 پاسخ پشتیبانی — تیکت {tk['ticket_code']}\n\n"
+                    f"{reply_text}"
+                ),
+            )
+        except Exception:
+            logger.exception("send ticket reply to user")
+        from utils.helpers import is_super_admin, get_admin_record
+        if is_super_admin(uid):
+            panel = kb.admin_panel_kb({"_super": True})
+        else:
+            panel = kb.admin_panel_kb(await get_admin_record(uid) or {})
+        await message.reply(
+            f"✅ پاسخ برای تیکت {tk['ticket_code']} ارسال شد.",
+            components=panel,
+        )
+        return
+
     if state == "admin_broadcast" and await is_admin(uid):
         if text in ("/cancel", "لغو"):
             await clear_state(uid)
@@ -888,10 +941,11 @@ async def handle_text_message(message: Message, bot) -> None:
     if state == "await_ticket":
         cat = (data or {}).get("category", "other")
         code = generate_ticket_code()
-        await db.execute(
+        ticket_id = await db.fetchval(
             """
             INSERT INTO tickets (ticket_code, user_id, category, message, status)
             VALUES ($1, $2, $3, $4, 'open')
+            RETURNING id
             """,
             code, uid, cat, text[:4000],
         )
@@ -902,13 +956,34 @@ async def handle_text_message(message: Message, bot) -> None:
             _u = message.from_user or message.author
             if _u and getattr(_u, "username", None):
                 uref = format_user_ref(_u.username, uid)
-            await bot.send_message(
-                chat_id=config.ADMIN_ID,
-                text=f"🎫 {code}\nکاربر: {uref}\n{cat}\n\n{text[:1500]}",
-            )
+            from utils.helpers import list_admin_ids_with_perm
+            from bale import InlineKeyboardMarkup, InlineKeyboardButton
+            mk = InlineKeyboardMarkup()
+            if ticket_id:
+                mk.add(
+                    InlineKeyboardButton(
+                        text="💬 پاسخ",
+                        callback_data=f"admin:ticket:reply:{ticket_id}",
+                    ),
+                    row=1,
+                )
+                mk.add(
+                    InlineKeyboardButton(
+                        text="✅ بستن",
+                        callback_data=f"admin:ticket:close:{ticket_id}",
+                    ),
+                    row=1,
+                )
+            note = f"🎫 تیکت جدید {code}\nکاربر: {uref}\nدسته: {cat}\n\n{text[:1500]}"
+            for aid in await list_admin_ids_with_perm("can_tickets"):
+                try:
+                    await bot.send_message(chat_id=aid, text=note, components=mk)
+                except Exception:
+                    pass
         except Exception:
-            pass
+            logger.exception("notify ticket")
         return
+
 
     if state == "await_channel":
         ok, reason = await sub_svc.can_add_channel(uid)

@@ -586,17 +586,114 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
             await _deny()
             return
         rows = await db.fetch(
-            "SELECT * FROM tickets WHERE status = 'open' ORDER BY id DESC LIMIT 15"
+            """
+            SELECT * FROM tickets
+            WHERE status IN ('open', 'answered')
+            ORDER BY
+                CASE status WHEN 'open' THEN 0 ELSE 1 END,
+                id DESC
+            LIMIT 20
+            """
         )
         if not rows:
             await msg.reply("تیکت بازی نیست.", components=await _panel())
             return
-        for t in rows:
-            uref = await resolve_user_ref(t["user_id"])
+        from bale import InlineKeyboardMarkup, InlineKeyboardButton
+        await msg.reply(f"🎫 {len(rows)} تیکت فعال:")
+        for tk in rows:
+            uref = await resolve_user_ref(tk["user_id"])
+            st = "🟢 باز" if tk["status"] == "open" else "💬 پاسخ‌داده‌شده"
+            mk = InlineKeyboardMarkup()
+            mk.add(
+                InlineKeyboardButton(text="💬 پاسخ", callback_data=f"admin:ticket:reply:{tk['id']}"),
+                row=1,
+            )
+            mk.add(
+                InlineKeyboardButton(text="📜 تاریخچه", callback_data=f"admin:ticket:hist:{tk['id']}"),
+                row=1,
+            )
+            mk.add(
+                InlineKeyboardButton(text="✅ بستن", callback_data=f"admin:ticket:close:{tk['id']}"),
+                row=2,
+            )
             await bot.send_message(
                 chat_id=uid,
-                text=f"{t['ticket_code']} | {t['category']}\nکاربر: {uref}\n{t['message'][:500]}",
+                text=(
+                    f"{st} | {tk['ticket_code']} | {tk['category']}\n"
+                    f"کاربر: {uref}\n\n"
+                    f"{(tk.get('message') or '')[:500]}"
+                ),
+                components=mk,
             )
+        return
+
+    if data.startswith("admin:ticket:reply:"):
+        if not await has_admin_perm(uid, "can_tickets"):
+            await _deny()
+            return
+        ticket_id = int(data.split(":")[-1])
+        tk = await db.fetchrow("SELECT * FROM tickets WHERE id = $1", ticket_id)
+        if not tk:
+            await msg.reply("تیکت یافت نشد.")
+            return
+        from handlers.user import set_state
+        await set_state(uid, "admin_ticket_reply", {"ticket_id": ticket_id})
+        await msg.reply(
+            f"پاسخ تیکت {tk['ticket_code']} را بنویسید:\n/cancel برای لغو"
+        )
+        return
+
+    if data.startswith("admin:ticket:hist:"):
+        if not await has_admin_perm(uid, "can_tickets"):
+            await _deny()
+            return
+        ticket_id = int(data.split(":")[-1])
+        tk = await db.fetchrow("SELECT * FROM tickets WHERE id = $1", ticket_id)
+        if not tk:
+            await msg.reply("تیکت یافت نشد.")
+            return
+        msgs = await db.fetch(
+            """
+            SELECT * FROM ticket_messages
+            WHERE ticket_id = $1 ORDER BY id ASC LIMIT 30
+            """,
+            ticket_id,
+        )
+        lines = [
+            f"📜 {tk['ticket_code']} | {tk['status']}\n",
+            f"پیام اول:\n{(tk.get('message') or '')[:800]}\n",
+        ]
+        for m in msgs:
+            who = "👤 کاربر" if m["sender_type"] == "user" else "🛡 ادمین"
+            lines.append(f"{who}:\n{m['message'][:600]}\n")
+        from bale import InlineKeyboardMarkup, InlineKeyboardButton
+        mk = InlineKeyboardMarkup()
+        mk.add(InlineKeyboardButton(text="💬 پاسخ", callback_data=f"admin:ticket:reply:{ticket_id}"), row=1)
+        mk.add(InlineKeyboardButton(text="✅ بستن", callback_data=f"admin:ticket:close:{ticket_id}"), row=1)
+        await msg.reply("\n".join(lines)[:3900], components=mk)
+        return
+
+    if data.startswith("admin:ticket:close:"):
+        if not await has_admin_perm(uid, "can_tickets"):
+            await _deny()
+            return
+        ticket_id = int(data.split(":")[-1])
+        tk = await db.fetchrow("SELECT * FROM tickets WHERE id = $1", ticket_id)
+        if not tk:
+            await msg.reply("تیکت یافت نشد.")
+            return
+        await db.execute(
+            "UPDATE tickets SET status = 'closed', admin_id = $2, updated_at = NOW() WHERE id = $1",
+            ticket_id, uid,
+        )
+        try:
+            await bot.send_message(
+                chat_id=tk["user_id"],
+                text=f"✅ تیکت {tk['ticket_code']} بسته شد.",
+            )
+        except Exception:
+            pass
+        await msg.reply(f"تیکت {tk['ticket_code']} بسته شد.", components=await _panel())
         return
 
     if data == "admin:sources":
@@ -617,18 +714,44 @@ async def handle_admin_callback(callback: CallbackQuery, bot) -> None:
             return
         rows = await db.fetch(
             """
-            SELECT id, user_id, plan_key, status, created_at, used_at
-            FROM licenses ORDER BY id DESC LIMIT 20
+            SELECT id, user_id, plan_key, status, created_at, used_at, code_plain
+            FROM licenses ORDER BY id DESC LIMIT 25
             """
         )
         if not rows:
             await msg.reply("لایسنسی نیست.", components=await _panel())
             return
-        lines = ["🔑 آخرین لایسنس‌ها\n"]
+        from bale import InlineKeyboardMarkup, InlineKeyboardButton
+        await msg.reply(f"🔑 آخرین {len(rows)} لایسنس:")
         for r in rows:
             uref = await resolve_user_ref(r["user_id"]) if r["user_id"] else "—"
-            lines.append(f"#{r['id']} {r['status']} | {uref} | {r['plan_key']}")
-        await msg.reply("\n".join(lines), components=await _panel())
+            st = r["status"]
+            icon = {"active": "🟢", "used": "✅", "revoked": "🚫", "expired": "⏳"}.get(st, "•")
+            code_hint = ""
+            if r.get("code_plain") and st == "active":
+                code_hint = f"\nکد: `{r['code_plain']}`"
+            text = f"{icon} #{r['id']} | {st} | {r['plan_key']}\nکاربر: {uref}{code_hint}"
+            if st in ("active", "used"):
+                mk = InlineKeyboardMarkup()
+                mk.add(
+                    InlineKeyboardButton(
+                        text="🚫 لغو / فاقد اعتبار",
+                        callback_data=f"admin:lic:revoke:{r['id']}",
+                    ),
+                    row=1,
+                )
+                await bot.send_message(chat_id=uid, text=text, components=mk)
+            else:
+                await bot.send_message(chat_id=uid, text=text)
+        return
+
+    if data.startswith("admin:lic:revoke:"):
+        if not await has_admin_perm(uid, "can_licenses"):
+            await _deny()
+            return
+        lid = int(data.split(":")[-1])
+        ok, resp = await pay_svc.revoke_license(lid, uid)
+        await msg.reply(resp, components=await _panel())
         return
 
     if data == "admin:broadcast":

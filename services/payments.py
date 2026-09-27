@@ -142,8 +142,14 @@ async def redeem_license(user_id: int, code: str) -> Tuple[bool, str]:
             return False, "❌ کد لایسنس معتبر نیست."
         if row["status"] == "used":
             return False, "❌ این لایسنس قبلاً استفاده شده است."
+        if row["status"] == "revoked":
+            return False, "❌ این لایسنس لغو شده و فاقد اعتبار است."
+        if row["status"] == "expired":
+            return False, "❌ مهلت استفاده از این لایسنس به پایان رسیده است."
+        if row["status"] == "cancelled":
+            return False, "❌ این لایسنس لغو شده و فاقد اعتبار است."
         if row["status"] != "active":
-            return False, "❌ کد لایسنس معتبر نیست."
+            return False, "❌ این لایسنس نامعتبر است."
         if row["user_id"] != user_id:
             return False, "❌ این لایسنس متعلق به حساب دیگری است."
         if row["expires_at"] and row["expires_at"] < utcnow():
@@ -228,3 +234,27 @@ async def set_card_settings(card_number: str, card_holder: str | None = None) ->
             """,
             card_holder.strip(),
         )
+
+
+async def revoke_license(license_id: int, admin_id: int | None = None) -> Tuple[bool, str]:
+    """Invalidate a license so it cannot be redeemed."""
+    row = await db.fetchrow("SELECT * FROM licenses WHERE id = $1", int(license_id))
+    if not row:
+        return False, "لایسنس یافت نشد."
+    if row["status"] == "revoked":
+        return False, "این لایسنس از قبل لغو شده است."
+    if row["status"] == "used":
+        # still mark revoked for audit; subscription not auto-killed
+        await db.execute(
+            "UPDATE licenses SET status = 'revoked' WHERE id = $1",
+            int(license_id),
+        )
+        return True, (
+            f"لایسنس #{license_id} لغو شد (قبلاً استفاده شده بود).\n"
+            "اشتراک فعال کاربر جداگانه قابل قطع است."
+        )
+    await db.execute(
+        "UPDATE licenses SET status = 'revoked' WHERE id = $1",
+        int(license_id),
+    )
+    return True, f"✅ لایسنس #{license_id} لغو و فاقد اعتبار شد."
